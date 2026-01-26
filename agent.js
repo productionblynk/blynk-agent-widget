@@ -1,18 +1,14 @@
 /* =====================================================
    B-lynk Agent Widget — Phase 1
-   Vanilla JS | Auto-boot | No build step
+   Vanilla JS | Auto-boot | UI Renderer (no API yet)
 ===================================================== */
 
 (function () {
-  // Prevent double-mounting
   if (window.BLYNK_AGENT) {
     console.warn("[Blynk Agent] Already initialized.");
     return;
   }
 
-  /* -------------------------------------
-     Locate this script tag
-  ------------------------------------- */
   const scriptEl = document.currentScript || (function () {
     const scripts = document.getElementsByTagName("script");
     return scripts[scripts.length - 1];
@@ -23,14 +19,12 @@
     return;
   }
 
-  /* -------------------------------------
-     Parse config from data attributes
-  ------------------------------------- */
   const config = {
     clientId: scriptEl.getAttribute("data-client-id") || "blynk-default",
     apiUrl: scriptEl.getAttribute("data-api-url"),
     mode: scriptEl.getAttribute("data-mode") || "blynk_kb",
     debug: scriptEl.hasAttribute("data-debug"),
+    title: scriptEl.getAttribute("data-title") || "Support",
   };
 
   if (!config.apiUrl) {
@@ -38,53 +32,368 @@
     return;
   }
 
-  /* -------------------------------------
-     Create root container
-  ------------------------------------- */
   const ROOT_ID = "blynk-agent-root";
+  const STYLE_ID = "blynk-agent-style";
+
+  function log(...args) {
+    if (config.debug) console.log("[Blynk Agent]", ...args);
+  }
+
+  function injectStylesOnce() {
+    if (document.getElementById(STYLE_ID)) return;
+    const style = document.createElement("style");
+    style.id = STYLE_ID;
+    style.textContent = `
+      #${ROOT_ID} { all: initial; }
+      #${ROOT_ID} * { box-sizing: border-box; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+      .blynk-launcher {
+        width: 56px; height: 56px; border-radius: 999px; border: none; cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+        box-shadow: 0 12px 30px rgba(0,0,0,0.18);
+        background: #111; color: #fff;
+      }
+      .blynk-panel {
+        width: 360px; max-width: calc(100vw - 32px);
+        height: 520px; max-height: calc(100vh - 120px);
+        background: #fff; color: #111;
+        border-radius: 18px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.20);
+        overflow: hidden;
+        display: none;
+        flex-direction: column;
+      }
+      .blynk-panel.open { display: flex; }
+      .blynk-header {
+        padding: 14px 14px;
+        border-bottom: 1px solid rgba(0,0,0,0.08);
+        display: flex; align-items: center; justify-content: space-between;
+        background: #fff;
+      }
+      .blynk-title { font-size: 14px; font-weight: 600; }
+      .blynk-close {
+        border: none; background: transparent; cursor: pointer;
+        font-size: 18px; line-height: 1; padding: 6px 8px; border-radius: 10px;
+      }
+      .blynk-close:hover { background: rgba(0,0,0,0.05); }
+      .blynk-thread {
+        flex: 1;
+        padding: 14px;
+        overflow: auto;
+        background: #fafafa;
+      }
+      .blynk-row { display: flex; margin-bottom: 10px; }
+      .blynk-row.user { justify-content: flex-end; }
+      .blynk-row.assistant { justify-content: flex-start; }
+      .blynk-bubble {
+        max-width: 82%;
+        border-radius: 16px;
+        padding: 10px 12px;
+        font-size: 13px;
+        line-height: 1.4;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+      }
+      .blynk-bubble.user {
+        background: #111; color: #fff; border-bottom-right-radius: 6px;
+      }
+      .blynk-bubble.assistant {
+        background: #fff; color: #111; border: 1px solid rgba(0,0,0,0.08);
+        border-bottom-left-radius: 6px;
+      }
+      .blynk-sources {
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid rgba(0,0,0,0.06);
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .blynk-source {
+        font-size: 12px;
+        color: #0b57d0;
+        text-decoration: none;
+        display: inline-flex;
+        gap: 6px;
+        align-items: center;
+      }
+      .blynk-source:hover { text-decoration: underline; }
+      .blynk-composer {
+        padding: 12px;
+        border-top: 1px solid rgba(0,0,0,0.08);
+        background: #fff;
+        display: flex;
+        gap: 8px;
+        align-items: flex-end;
+      }
+      .blynk-input {
+        flex: 1;
+        min-height: 38px;
+        max-height: 120px;
+        resize: none;
+        padding: 10px 10px;
+        font-size: 13px;
+        line-height: 1.3;
+        border-radius: 12px;
+        border: 1px solid rgba(0,0,0,0.18);
+        outline: none;
+      }
+      .blynk-send {
+        border: none; cursor: pointer;
+        height: 38px; padding: 0 14px;
+        border-radius: 12px;
+        background: #111; color: #fff;
+        font-size: 13px; font-weight: 600;
+      }
+      .blynk-send:disabled { opacity: 0.5; cursor: not-allowed; }
+      .blynk-wrap {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        z-index: 999999;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        align-items: flex-end;
+      }
+    `;
+    document.head.appendChild(style);
+  }
 
   function createRoot() {
     if (document.getElementById(ROOT_ID)) return;
-
     const root = document.createElement("div");
     root.id = ROOT_ID;
     root.setAttribute("data-client-id", config.clientId);
-
-    // Minimal, non-opinionated base styles
-    root.style.position = "fixed";
-    root.style.bottom = "24px";
-    root.style.right = "24px";
-    root.style.zIndex = "999999";
-    root.style.fontFamily = "system-ui, sans-serif";
-
     document.body.appendChild(root);
   }
 
-  /* -------------------------------------
-     Public API (future-proofed)
-  ------------------------------------- */
+  function el(tag, attrs = {}, children = []) {
+    const node = document.createElement(tag);
+    Object.entries(attrs).forEach(([k, v]) => {
+      if (k === "class") node.className = v;
+      else if (k === "text") node.textContent = v;
+      else if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2), v);
+      else node.setAttribute(k, v);
+    });
+    children.forEach((c) => node.appendChild(c));
+    return node;
+  }
+
+  function safeLink(url) {
+    try {
+      const u = new URL(url, window.location.href);
+      return u.href;
+    } catch {
+      return null;
+    }
+  }
+
   const Agent = {
     config,
     root: null,
+    isOpen: false,
+    ui: {},
+    _thinkingEl: null,
 
     init() {
+      injectStylesOnce();
       createRoot();
       this.root = document.getElementById(ROOT_ID);
 
-      if (config.debug) {
-        console.log("[Blynk Agent] Initialized", {
-          config: this.config,
-          root: this.root,
+      this.mountUI();
+      log("Initialized", { config: this.config });
+    },
+
+    mountUI() {
+      const wrap = el("div", { class: "blynk-wrap" });
+
+      const launcher = el("button", {
+        class: "blynk-launcher",
+        type: "button",
+        title: "Open support chat",
+        onClick: () => this.toggle(),
+      });
+      launcher.innerHTML = `
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M4 5.5C4 4.67 4.67 4 5.5 4h13C19.33 4 20 4.67 20 5.5v9c0 .83-.67 1.5-1.5 1.5H9l-4.2 3.15c-.5.38-1.2.02-1.2-.6V5.5Z"
+                stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+        </svg>
+      `;
+
+      const panel = el("div", { class: "blynk-panel", role: "dialog", "aria-label": "Support chat" });
+
+      const header = el("div", { class: "blynk-header" }, [
+        el("div", { class: "blynk-title", text: this.config.title }),
+        el("button", {
+          class: "blynk-close",
+          type: "button",
+          "aria-label": "Close",
+          onClick: () => this.close(),
+        }, []),
+      ]);
+      header.querySelector(".blynk-close").textContent = "×";
+
+      const thread = el("div", { class: "blynk-thread" });
+
+      const input = el("textarea", {
+        class: "blynk-input",
+        placeholder: "Ask a question…",
+        rows: "1",
+      });
+
+      // Auto-grow textarea
+      input.addEventListener("input", () => {
+        input.style.height = "auto";
+        input.style.height = Math.min(input.scrollHeight, 120) + "px";
+      });
+
+      const sendBtn = el("button", {
+        class: "blynk-send",
+        type: "button",
+        text: "Send",
+        onClick: () => this.handleSend(),
+      });
+
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          this.handleSend();
+        }
+      });
+
+      const composer = el("div", { class: "blynk-composer" }, [input, sendBtn]);
+
+      panel.appendChild(header);
+      panel.appendChild(thread);
+      panel.appendChild(composer);
+
+      wrap.appendChild(panel);
+      wrap.appendChild(launcher);
+
+      this.root.appendChild(wrap);
+
+      this.ui = { wrap, launcher, panel, header, thread, input, sendBtn };
+
+      // Optional welcome
+      this.appendAssistant("Hi! How can I help today?");
+    },
+
+    open() {
+      this.isOpen = true;
+      this.ui.panel.classList.add("open");
+      this.ui.input.focus();
+      this.scrollToBottom();
+    },
+
+    close() {
+      this.isOpen = false;
+      this.ui.panel.classList.remove("open");
+    },
+
+    toggle() {
+      this.isOpen ? this.close() : this.open();
+    },
+
+    appendUser(text) {
+      const row = el("div", { class: "blynk-row user" });
+      const bubble = el("div", { class: "blynk-bubble user", text });
+      row.appendChild(bubble);
+      this.ui.thread.appendChild(row);
+      this.scrollToBottom();
+    },
+
+    appendAssistant(text, sources) {
+      const row = el("div", { class: "blynk-row assistant" });
+      const bubble = el("div", { class: "blynk-bubble assistant" });
+      bubble.textContent = text;
+
+      if (Array.isArray(sources) && sources.length) {
+        const sourcesEl = el("div", { class: "blynk-sources" });
+        sources.slice(0, 5).forEach((s) => {
+          const href = safeLink(s.url);
+          if (!href) return;
+
+          const a = el("a", {
+            class: "blynk-source",
+            href,
+            target: "_blank",
+            rel: "noopener noreferrer",
+          });
+          a.textContent = s.title || href;
+          sourcesEl.appendChild(a);
         });
+        bubble.appendChild(sourcesEl);
       }
 
-      // UI + chat logic will mount here next
+      row.appendChild(bubble);
+      this.ui.thread.appendChild(row);
+      this.scrollToBottom();
+    },
+
+    showThinking() {
+      // Remove any existing thinking bubble
+      this.removeThinking();
+
+      const row = el("div", { class: "blynk-row assistant" });
+      const bubble = el("div", { class: "blynk-bubble assistant", text: "Thinking…" });
+      row.appendChild(bubble);
+      this.ui.thread.appendChild(row);
+
+      this._thinkingEl = row;
+      this.scrollToBottom();
+    },
+
+    removeThinking() {
+      if (this._thinkingEl && this._thinkingEl.parentNode) {
+        this._thinkingEl.parentNode.removeChild(this._thinkingEl);
+      }
+      this._thinkingEl = null;
+    },
+
+    setSending(isSending) {
+      this.ui.sendBtn.disabled = isSending;
+      this.ui.input.disabled = isSending;
+    },
+
+    scrollToBottom() {
+      const t = this.ui.thread;
+      t.scrollTop = t.scrollHeight;
+    },
+
+    async handleSend() {
+      const text = (this.ui.input.value || "").trim();
+      if (!text) return;
+
+      this.appendUser(text);
+      this.ui.input.value = "";
+      this.ui.input.style.height = "auto";
+
+      this.setSending(true);
+      this.showThinking();
+
+      try {
+        // Stub response for now (API wiring is next step)
+        await new Promise((r) => setTimeout(r, 600));
+        const stub = {
+          answer: "Got it. Next step is wiring this UI to your /ask endpoint.",
+          sources: [
+            { title: "Example Article Source", url: "https://example.com/articles/example" },
+          ],
+        };
+
+        this.removeThinking();
+        this.appendAssistant(stub.answer, stub.sources);
+      } catch (err) {
+        this.removeThinking();
+        this.appendAssistant("Sorry — something went wrong. Please try again.");
+        log("Error", err);
+      } finally {
+        this.setSending(false);
+        this.ui.input.focus();
+      }
     },
   };
 
-  /* -------------------------------------
-     Boot
-  ------------------------------------- */
   window.BLYNK_AGENT = Agent;
 
   if (document.readyState === "loading") {
