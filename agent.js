@@ -46,12 +46,25 @@
     style.textContent = `
       #${ROOT_ID} { all: initial; }
       #${ROOT_ID} * { box-sizing: border-box; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+
+      .blynk-wrap {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        z-index: 999999;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        align-items: flex-end;
+      }
+
       .blynk-launcher {
         width: 56px; height: 56px; border-radius: 999px; border: none; cursor: pointer;
         display: flex; align-items: center; justify-content: center;
         box-shadow: 0 12px 30px rgba(0,0,0,0.18);
         background: #111; color: #fff;
       }
+
       .blynk-panel {
         width: 360px; max-width: calc(100vw - 32px);
         height: 520px; max-height: calc(100vh - 120px);
@@ -63,6 +76,7 @@
         flex-direction: column;
       }
       .blynk-panel.open { display: flex; }
+
       .blynk-header {
         padding: 14px 14px;
         border-bottom: 1px solid rgba(0,0,0,0.08);
@@ -70,11 +84,13 @@
         background: #fff;
       }
       .blynk-title { font-size: 14px; font-weight: 600; }
+
       .blynk-close {
         border: none; background: transparent; cursor: pointer;
         font-size: 18px; line-height: 1; padding: 6px 8px; border-radius: 10px;
       }
       .blynk-close:hover { background: rgba(0,0,0,0.05); }
+
       .blynk-thread {
         flex: 1;
         padding: 14px;
@@ -84,6 +100,7 @@
       .blynk-row { display: flex; margin-bottom: 10px; }
       .blynk-row.user { justify-content: flex-end; }
       .blynk-row.assistant { justify-content: flex-start; }
+
       .blynk-bubble {
         max-width: 82%;
         border-radius: 16px;
@@ -100,6 +117,7 @@
         background: #fff; color: #111; border: 1px solid rgba(0,0,0,0.08);
         border-bottom-left-radius: 6px;
       }
+
       .blynk-sources {
         margin-top: 8px;
         padding-top: 8px;
@@ -117,6 +135,7 @@
         align-items: center;
       }
       .blynk-source:hover { text-decoration: underline; }
+
       .blynk-composer {
         padding: 12px;
         border-top: 1px solid rgba(0,0,0,0.08);
@@ -145,16 +164,6 @@
         font-size: 13px; font-weight: 600;
       }
       .blynk-send:disabled { opacity: 0.5; cursor: not-allowed; }
-      .blynk-wrap {
-        position: fixed;
-        bottom: 24px;
-        right: 24px;
-        z-index: 999999;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-        align-items: flex-end;
-      }
     `;
     document.head.appendChild(style);
   }
@@ -172,7 +181,6 @@
     Object.entries(attrs).forEach(([k, v]) => {
       if (k === "class") node.className = v;
       else if (k === "text") node.textContent = v;
-      else if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2).toLowerCase(), v);
       else node.setAttribute(k, v);
     });
     children.forEach((c) => node.appendChild(c));
@@ -207,12 +215,13 @@
     mountUI() {
       const wrap = el("div", { class: "blynk-wrap" });
 
+      // Launcher
       const launcher = el("button", {
         class: "blynk-launcher",
         type: "button",
         title: "Open support chat",
-        onClick: () => this.toggle(),
       });
+      launcher.addEventListener("click", () => this.toggle());
       launcher.innerHTML = `
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M4 5.5C4 4.67 4.67 4 5.5 4h13C19.33 4 20 4.67 20 5.5v9c0 .83-.67 1.5-1.5 1.5H9l-4.2 3.15c-.5.38-1.2.02-1.2-.6V5.5Z"
@@ -220,18 +229,22 @@
         </svg>
       `;
 
+      // Panel
       const panel = el("div", { class: "blynk-panel", role: "dialog", "aria-label": "Support chat" });
+
+      // Close button (must be created outside the array)
+      const closeBtn = el("button", {
+        class: "blynk-close",
+        type: "button",
+        "aria-label": "Close",
+      });
+      closeBtn.textContent = "×";
+      closeBtn.addEventListener("click", () => this.close());
 
       const header = el("div", { class: "blynk-header" }, [
         el("div", { class: "blynk-title", text: this.config.title }),
-        el("button", {
-          class: "blynk-close",
-          type: "button",
-          "aria-label": "Close",
-          onClick: () => this.close(),
-        }, []),
+        closeBtn,
       ]);
-      header.querySelector(".blynk-close").textContent = "×";
 
       const thread = el("div", { class: "blynk-thread" });
 
@@ -251,8 +264,8 @@
         class: "blynk-send",
         type: "button",
         text: "Send",
-        onClick: () => this.handleSend(),
       });
+      sendBtn.addEventListener("click", () => this.handleSend());
 
       input.addEventListener("keydown", (e) => {
         if (e.key === "Enter" && !e.shiftKey) {
@@ -274,7 +287,7 @@
 
       this.ui = { wrap, launcher, panel, header, thread, input, sendBtn };
 
-      // Optional welcome
+      // Welcome message
       this.appendAssistant("Hi! How can I help today?");
     },
 
@@ -331,7 +344,6 @@
     },
 
     showThinking() {
-      // Remove any existing thinking bubble
       this.removeThinking();
 
       const row = el("div", { class: "blynk-row assistant" });
@@ -372,13 +384,11 @@
       this.showThinking();
 
       try {
-        // Stub response for now (API wiring is next step)
+        // Stub response for now (API wiring is next)
         await new Promise((r) => setTimeout(r, 600));
         const stub = {
-          answer: "Got it. Next step is wiring this UI to your /ask endpoint.",
-          sources: [
-            { title: "Example Article Source", url: "https://example.com/articles/example" },
-          ],
+          answer: "UI is working. Next step is wiring this to your /ask endpoint.",
+          sources: [{ title: "Example Article Source", url: "https://example.com/articles/example" }],
         };
 
         this.removeThinking();
