@@ -384,15 +384,28 @@
       this.showThinking();
 
       try {
-        // Stub response for now (API wiring is next)
-        await new Promise((r) => setTimeout(r, 600));
-        const stub = {
-          answer: "UI is working. Next step is wiring this to your /ask endpoint.",
-          sources: [{ title: "Example Article Source", url: "https://example.com/articles/example" }],
-        };
+      const res = await fetch(this.config.apiUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          question: text,
+          clientId: this.config.clientId,
+          mode: this.config.mode,
+        }),
+      });
+      
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        throw new Error(`Ask failed (${res.status}): ${errText}`);
+      }
+      
+      const data = await res.json();
+      
+      this.removeThinking();
+      this.appendAssistant(data.answer || "No answer returned.", data.sources || []);
 
-        this.removeThinking();
-        this.appendAssistant(stub.answer, stub.sources);
       } catch (err) {
         this.removeThinking();
         this.appendAssistant("Sorry — something went wrong. Please try again.");
