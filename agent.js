@@ -172,7 +172,7 @@
     Object.entries(attrs).forEach(([k, v]) => {
       if (k === "class") node.className = v;
       else if (k === "text") node.textContent = v;
-      else if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2), v);
+      else if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2).toLowerCase(), v);
       else node.setAttribute(k, v);
     });
     children.forEach((c) => node.appendChild(c));
