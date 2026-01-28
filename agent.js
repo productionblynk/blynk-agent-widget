@@ -1,6 +1,6 @@
 /* =====================================================
    B-lynk Agent Widget — Phase 1
-   Vanilla JS | Auto-boot | UI Renderer
+   Vanilla JS | Auto-boot | Role-aware UI
 ===================================================== */
 
 (function () {
@@ -25,7 +25,7 @@
     mode: scriptEl.getAttribute("data-mode") || "blynk_kb",
     debug: scriptEl.hasAttribute("data-debug"),
     title: scriptEl.getAttribute("data-title") || "Support",
-    role: scriptEl.getAttribute("data-role") || "user", // <-- role hint (UX only)
+    role: scriptEl.getAttribute("data-role") || "user", // UX role only
   };
 
   if (!config.apiUrl) {
@@ -36,10 +36,6 @@
   const ROOT_ID = "blynk-agent-root";
   const STYLE_ID = "blynk-agent-style";
 
-  function log(...args) {
-    if (config.debug) console.log("[Blynk Agent]", ...args);
-  }
-
   function injectStylesOnce() {
     if (document.getElementById(STYLE_ID)) return;
     const style = document.createElement("style");
@@ -47,16 +43,12 @@
     style.textContent = `
       #${ROOT_ID} { all: initial; }
       #${ROOT_ID} * { box-sizing: border-box; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-      .blynk-wrap { position: fixed; bottom: 24px; right: 24px; z-index: 999999; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
-      .blynk-launcher { width: 56px; height: 56px; border-radius: 999px; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 12px 30px rgba(0,0,0,0.18); background: #111; color: #fff; }
-      .blynk-panel { width: 360px; max-width: calc(100vw - 32px); height: 520px; background: #fff; border-radius: 18px; box-shadow: 0 20px 60px rgba(0,0,0,0.20); overflow: hidden; display: none; flex-direction: column; }
-      .blynk-panel.open { display: flex; }
-      .blynk-header { padding: 14px; border-bottom: 1px solid rgba(0,0,0,0.08); display: flex; justify-content: space-between; }
-      .blynk-title { font-size: 14px; font-weight: 600; }
+      .blynk-wrap { position: fixed; bottom: 24px; right: 24px; z-index: 999999; }
+      .blynk-panel { width: 360px; height: 520px; background: #fff; border-radius: 18px; box-shadow: 0 20px 60px rgba(0,0,0,0.2); display: flex; flex-direction: column; }
       .blynk-thread { flex: 1; padding: 14px; overflow: auto; background: #fafafa; }
       .blynk-row { display: flex; margin-bottom: 10px; }
       .blynk-row.user { justify-content: flex-end; }
-      .blynk-bubble { max-width: 82%; border-radius: 16px; padding: 10px 12px; font-size: 13px; }
+      .blynk-bubble { max-width: 82%; padding: 10px 12px; border-radius: 16px; font-size: 13px; }
       .blynk-bubble.user { background: #111; color: #fff; }
       .blynk-bubble.assistant { background: #fff; border: 1px solid rgba(0,0,0,0.08); }
       .blynk-sources { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(0,0,0,0.06); display: flex; flex-direction: column; gap: 6px; }
@@ -87,15 +79,22 @@
     }
   }
 
+  function filterSourcesByRole(sources, role) {
+    if (!Array.isArray(sources)) return [];
+    if (role === "admin") return sources;
+    return sources.filter((s) => (s.audience_role || "user") === "user");
+  }
+
   const Agent = {
     init() {
       injectStylesOnce();
+
       const root = document.createElement("div");
       root.id = ROOT_ID;
       document.body.appendChild(root);
 
       const wrap = el("div", { class: "blynk-wrap" });
-      const panel = el("div", { class: "blynk-panel open" });
+      const panel = el("div", { class: "blynk-panel" });
       const thread = el("div", { class: "blynk-thread" });
       const input = el("textarea", { class: "blynk-input", placeholder: "Ask a question…" });
       const send = el("button", { class: "blynk-send", text: "Send" });
@@ -109,29 +108,30 @@
           el("div", { class: "blynk-bubble user", text: q }),
         ]));
 
-        const res = await fetch(config.apiUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            question: q,
-            clientId: config.clientId,
-            mode: config.mode,
-          }),
-        });
+        let data;
+        try {
+          const res = await fetch(config.apiUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              question: q,
+              clientId: config.clientId,
+              mode: config.mode,
+              role: config.role,
+            }),
+          });
+          data = await res.json();
+        } catch {
+          data = { answer: "Sorry — something went wrong.", sources: [] };
+        }
 
-        const data = await res.json();
-
-        // ----------------------------
-        // SOURCE VISIBILITY FILTER
-        // ----------------------------
-        const visibleSources = (data.sources || []).filter((s) => {
-          const role = (s.audience_role || "user").toLowerCase();
-          return config.role === "admin" || role === "user";
-        });
+        const allSources = Array.isArray(data.sources) ? data.sources : [];
+        const visibleSources = filterSourcesByRole(allSources, config.role);
 
         let answer = data.answer || "No answer returned.";
 
-        if ((data.sources || []).length > 0 && visibleSources.length === 0) {
+        // 🚨 ADMIN-ONLY BLOCK
+        if (allSources.length > 0 && visibleSources.length === 0) {
           answer = "This action requires administrator access. Please contact your admin.";
         }
 
@@ -142,7 +142,13 @@
           visibleSources.forEach((s) => {
             const href = safeLink(s.url);
             if (!href) return;
-            src.appendChild(el("a", { class: "blynk-source", href, target: "_blank", text: s.title }));
+            src.appendChild(el("a", {
+              class: "blynk-source",
+              href,
+              target: "_blank",
+              rel: "noopener noreferrer",
+              text: s.title,
+            }));
           });
           bubble.appendChild(src);
         }
