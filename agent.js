@@ -9,10 +9,12 @@
     return;
   }
 
-  const scriptEl = document.currentScript || (function () {
-    const scripts = document.getElementsByTagName("script");
-    return scripts[scripts.length - 1];
-  })();
+  const scriptEl =
+    document.currentScript ||
+    (function () {
+      const scripts = document.getElementsByTagName("script");
+      return scripts[scripts.length - 1];
+    })();
 
   if (!scriptEl) {
     console.error("[Blynk Agent] Unable to locate script tag.");
@@ -21,21 +23,22 @@
 
   const config = {
     clientId: scriptEl.getAttribute("data-client-id") || "blynk-default",
-    apiUrl: scriptEl.getAttribute("data-api-url"),
+    apiUrl: scriptEl.getAttribute("data-api-url"), // MUST be full supabase function URL
     mode: scriptEl.getAttribute("data-mode") || "blynk_kb",
     debug: scriptEl.hasAttribute("data-debug"),
     title: scriptEl.getAttribute("data-title") || "Support",
 
-    // ✅ UX-only role hint: "user" (default) or "admin"
-    role: (scriptEl.getAttribute("data-role") || "user").toLowerCase().trim(),
+    // UX role hint (controls what links you show)
+    role: (scriptEl.getAttribute("data-role") || "user").toLowerCase(),
 
-    // Optional: if you ever want to test admin in the widget without headers
-    // (won’t break anything if blank)
+    // Optional: only set this on admin pages for testing
     adminToken: scriptEl.getAttribute("data-admin-token") || "",
   };
 
-  if (!config.apiUrl) {
-    console.error("[Blynk Agent] Missing required data-api-url.");
+  if (!config.apiUrl || !/^https?:\/\//i.test(config.apiUrl)) {
+    console.error(
+      "[Blynk Agent] Missing or invalid data-api-url. It must be a full URL like https://YOURPROJECT.supabase.co/functions/v1/ask"
+    );
     return;
   }
 
@@ -179,7 +182,6 @@
     if (document.getElementById(ROOT_ID)) return;
     const root = document.createElement("div");
     root.id = ROOT_ID;
-    root.setAttribute("data-client-id", config.clientId);
     document.body.appendChild(root);
   }
 
@@ -196,24 +198,24 @@
 
   function safeLink(url) {
     try {
-      const u = new URL(url, window.location.href);
-      return u.href;
+      return new URL(url, window.location.href).href;
     } catch {
       return null;
     }
   }
 
-  // ✅ Filter sources based on role + source audience_role
-  function filterSourcesByRole(sources, viewerRole) {
+  // Normalize + filter sources based on widget role
+  function filterSourcesByRole(sources, role) {
     if (!Array.isArray(sources)) return [];
-    if ((viewerRole || "user") === "admin") return sources;
+    if (role === "admin") return sources;
 
-    // user -> only show user sources
+    // user only
     return sources.filter((s) => {
-      const ar = (s && (s.audience_role || s.audienceRole || "user"))
-        .toString()
-        .toLowerCase()
-        .trim();
+      const ar =
+        (s && (s.audience_role || s.audienceRole || "user"))
+          .toString()
+          .toLowerCase()
+          .trim();
       return ar === "user";
     });
   }
@@ -229,7 +231,6 @@
       injectStylesOnce();
       createRoot();
       this.root = document.getElementById(ROOT_ID);
-
       this.mountUI();
       log("Initialized", { config: this.config });
     },
@@ -304,7 +305,6 @@
 
       wrap.appendChild(panel);
       wrap.appendChild(launcher);
-
       this.root.appendChild(wrap);
 
       this.ui = { wrap, launcher, panel, header, thread, input, sendBtn };
@@ -367,7 +367,10 @@
     showThinking() {
       this.removeThinking();
       const row = el("div", { class: "blynk-row assistant" });
-      const bubble = el("div", { class: "blynk-bubble assistant", text: "Thinking…" });
+      const bubble = el("div", {
+        class: "blynk-bubble assistant",
+        text: "Thinking…",
+      });
       row.appendChild(bubble);
       this.ui.thread.appendChild(row);
       this._thinkingEl = row;
@@ -403,17 +406,16 @@
       this.showThinking();
 
       try {
-        // ✅ keep headers simple to avoid CORS surprises
         const payload = {
           question: text,
           clientId: this.config.clientId,
           mode: this.config.mode,
 
-          // ✅ tell backend the requested role (backend can ignore/downgrade)
+          // send role hint to backend (backend still enforces admin via token)
           role: this.config.role,
         };
 
-        // Optional: if you want to test admin from widget without headers
+        // only include adminToken if you set it on the script tag
         if (this.config.adminToken) payload.adminToken = this.config.adminToken;
 
         const res = await fetch(this.config.apiUrl, {
@@ -429,18 +431,18 @@
 
         const data = await res.json();
 
-        this.removeThinking();
-
+        // FILTER SOURCES (UI ENFORCEMENT)
         const allSources = Array.isArray(data.sources) ? data.sources : [];
         const visibleSources = filterSourcesByRole(allSources, this.config.role);
 
         let answer = (data.answer || "No answer returned.").toString();
 
-        // ✅ If backend returned sources but none are visible to a user -> show admin message
-        if (allSources.length > 0 && visibleSources.length === 0 && this.config.role !== "admin") {
+        // If backend gave sources but none are visible to a user, show admin-only message
+        if (this.config.role !== "admin" && allSources.length > 0 && visibleSources.length === 0) {
           answer = "This action requires administrator access. Please contact your admin.";
         }
 
+        this.removeThinking();
         this.appendAssistant(answer, visibleSources);
       } catch (err) {
         this.removeThinking();
