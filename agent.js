@@ -23,10 +23,13 @@
 
   const config = {
     clientId: scriptEl.getAttribute("data-client-id") || "blynk-default",
-    apiUrl: scriptEl.getAttribute("data-api-url"), // MUST be full supabase function URL
+    apiUrl: scriptEl.getAttribute("data-api-url"), // full supabase function URL
     mode: scriptEl.getAttribute("data-mode") || "blynk_kb",
     debug: scriptEl.hasAttribute("data-debug"),
     title: scriptEl.getAttribute("data-title") || "Support",
+
+    // IMPORTANT: public anon key for calling the Edge Function (fixes 401)
+    anonKey: scriptEl.getAttribute("data-anon-key") || "",
 
     // UX role hint (controls what links you show)
     role: (scriptEl.getAttribute("data-role") || "user").toLowerCase(),
@@ -37,9 +40,16 @@
 
   if (!config.apiUrl || !/^https?:\/\//i.test(config.apiUrl)) {
     console.error(
-      "[Blynk Agent] Missing or invalid data-api-url. It must be a full URL like https://YOURPROJECT.supabase.co/functions/v1/ask"
+      "[Blynk Agent] Missing or invalid data-api-url. Must be a full URL like https://YOURPROJECT.supabase.co/functions/v1/ask"
     );
     return;
+  }
+
+  // If your function requires JWT verification, anonKey MUST be present.
+  if (!config.anonKey) {
+    console.warn(
+      "[Blynk Agent] Missing data-anon-key. If your function requires Authorization, you will get 401 until you add it."
+    );
   }
 
   const ROOT_ID = "blynk-agent-root";
@@ -204,12 +214,11 @@
     }
   }
 
-  // Normalize + filter sources based on widget role
+  // UI-only source filtering
   function filterSourcesByRole(sources, role) {
     if (!Array.isArray(sources)) return [];
     if (role === "admin") return sources;
 
-    // user only
     return sources.filter((s) => {
       const ar =
         (s && (s.audience_role || s.audienceRole || "user"))
@@ -410,17 +419,28 @@
           question: text,
           clientId: this.config.clientId,
           mode: this.config.mode,
-
-          // send role hint to backend (backend still enforces admin via token)
           role: this.config.role,
         };
 
-        // only include adminToken if you set it on the script tag
-        if (this.config.adminToken) payload.adminToken = this.config.adminToken;
+        const headers = {
+          "Content-Type": "application/json",
+        };
+
+        // ✅ FIX: add auth headers required by Supabase Edge Functions when verify_jwt is enabled
+        if (this.config.anonKey) {
+          headers.apikey = this.config.anonKey;
+          headers.Authorization = `Bearer ${this.config.anonKey}`;
+        }
+
+        // Optional admin role testing (backend still enforces)
+        if (this.config.adminToken) {
+          payload.adminToken = this.config.adminToken;
+          headers["x-admin-token"] = this.config.adminToken;
+        }
 
         const res = await fetch(this.config.apiUrl, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers,
           body: JSON.stringify(payload),
         });
 
@@ -431,14 +451,16 @@
 
         const data = await res.json();
 
-        // FILTER SOURCES (UI ENFORCEMENT)
         const allSources = Array.isArray(data.sources) ? data.sources : [];
         const visibleSources = filterSourcesByRole(allSources, this.config.role);
 
         let answer = (data.answer || "No answer returned.").toString();
 
-        // If backend gave sources but none are visible to a user, show admin-only message
-        if (this.config.role !== "admin" && allSources.length > 0 && visibleSources.length === 0) {
+        if (
+          this.config.role !== "admin" &&
+          allSources.length > 0 &&
+          visibleSources.length === 0
+        ) {
           answer = "This action requires administrator access. Please contact your admin.";
         }
 
