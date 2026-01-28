@@ -1,6 +1,6 @@
 /* =====================================================
    B-lynk Agent Widget — Phase 1
-   Vanilla JS | Auto-boot | UI Renderer (no API yet)
+   Vanilla JS | Auto-boot | UI Renderer
 ===================================================== */
 
 (function () {
@@ -25,6 +25,13 @@
     mode: scriptEl.getAttribute("data-mode") || "blynk_kb",
     debug: scriptEl.hasAttribute("data-debug"),
     title: scriptEl.getAttribute("data-title") || "Support",
+
+    // ✅ UX-only role hint: "user" (default) or "admin"
+    role: (scriptEl.getAttribute("data-role") || "user").toLowerCase().trim(),
+
+    // Optional: if you ever want to test admin in the widget without headers
+    // (won’t break anything if blank)
+    adminToken: scriptEl.getAttribute("data-admin-token") || "",
   };
 
   if (!config.apiUrl) {
@@ -196,6 +203,21 @@
     }
   }
 
+  // ✅ Filter sources based on role + source audience_role
+  function filterSourcesByRole(sources, viewerRole) {
+    if (!Array.isArray(sources)) return [];
+    if ((viewerRole || "user") === "admin") return sources;
+
+    // user -> only show user sources
+    return sources.filter((s) => {
+      const ar = (s && (s.audience_role || s.audienceRole || "user"))
+        .toString()
+        .toLowerCase()
+        .trim();
+      return ar === "user";
+    });
+  }
+
   const Agent = {
     config,
     root: null,
@@ -215,7 +237,6 @@
     mountUI() {
       const wrap = el("div", { class: "blynk-wrap" });
 
-      // Launcher
       const launcher = el("button", {
         class: "blynk-launcher",
         type: "button",
@@ -229,10 +250,12 @@
         </svg>
       `;
 
-      // Panel
-      const panel = el("div", { class: "blynk-panel", role: "dialog", "aria-label": "Support chat" });
+      const panel = el("div", {
+        class: "blynk-panel",
+        role: "dialog",
+        "aria-label": "Support chat",
+      });
 
-      // Close button (must be created outside the array)
       const closeBtn = el("button", {
         class: "blynk-close",
         type: "button",
@@ -254,7 +277,6 @@
         rows: "1",
       });
 
-      // Auto-grow textarea
       input.addEventListener("input", () => {
         input.style.height = "auto";
         input.style.height = Math.min(input.scrollHeight, 120) + "px";
@@ -287,7 +309,6 @@
 
       this.ui = { wrap, launcher, panel, header, thread, input, sendBtn };
 
-      // Welcome message
       this.appendAssistant("Hi! How can I help today?");
     },
 
@@ -345,12 +366,10 @@
 
     showThinking() {
       this.removeThinking();
-
       const row = el("div", { class: "blynk-row assistant" });
       const bubble = el("div", { class: "blynk-bubble assistant", text: "Thinking…" });
       row.appendChild(bubble);
       this.ui.thread.appendChild(row);
-
       this._thinkingEl = row;
       this.scrollToBottom();
     },
@@ -384,28 +403,45 @@
       this.showThinking();
 
       try {
-      const res = await fetch(this.config.apiUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+        // ✅ keep headers simple to avoid CORS surprises
+        const payload = {
           question: text,
           clientId: this.config.clientId,
           mode: this.config.mode,
-        }),
-      });
-      
-      if (!res.ok) {
-        const errText = await res.text().catch(() => "");
-        throw new Error(`Ask failed (${res.status}): ${errText}`);
-      }
-      
-      const data = await res.json();
-      
-      this.removeThinking();
-      this.appendAssistant(data.answer || "No answer returned.", data.sources || []);
 
+          // ✅ tell backend the requested role (backend can ignore/downgrade)
+          role: this.config.role,
+        };
+
+        // Optional: if you want to test admin from widget without headers
+        if (this.config.adminToken) payload.adminToken = this.config.adminToken;
+
+        const res = await fetch(this.config.apiUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+          const errText = await res.text().catch(() => "");
+          throw new Error(`Ask failed (${res.status}): ${errText}`);
+        }
+
+        const data = await res.json();
+
+        this.removeThinking();
+
+        const allSources = Array.isArray(data.sources) ? data.sources : [];
+        const visibleSources = filterSourcesByRole(allSources, this.config.role);
+
+        let answer = (data.answer || "No answer returned.").toString();
+
+        // ✅ If backend returned sources but none are visible to a user -> show admin message
+        if (allSources.length > 0 && visibleSources.length === 0 && this.config.role !== "admin") {
+          answer = "This action requires administrator access. Please contact your admin.";
+        }
+
+        this.appendAssistant(answer, visibleSources);
       } catch (err) {
         this.removeThinking();
         this.appendAssistant("Sorry — something went wrong. Please try again.");
