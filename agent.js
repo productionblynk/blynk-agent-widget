@@ -420,6 +420,7 @@
           clientId: this.config.clientId,
           mode: this.config.mode,
           role: this.config.role,
+         debug: this.config.debug, // ✅ enables backend debug output
         };
 
         const headers = {
