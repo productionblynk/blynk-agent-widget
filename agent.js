@@ -214,7 +214,7 @@
     }
   }
 
-  // UI-only source filtering
+  // UI-only source filtering (used only when backend is enforcing RBAC)
   function filterSourcesByRole(sources, role) {
     if (!Array.isArray(sources)) return [];
     if (role === "admin") return sources;
@@ -420,14 +420,14 @@
           clientId: this.config.clientId,
           mode: this.config.mode,
           role: this.config.role,
-         debug: this.config.debug, // ✅ enables backend debug output
+          debug: this.config.debug, // ✅ enables backend debug output
         };
 
         const headers = {
           "Content-Type": "application/json",
         };
 
-        // ✅ FIX: add auth headers required by Supabase Edge Functions when verify_jwt is enabled
+        // ✅ Auth headers for Supabase Edge Functions when verify_jwt is enabled
         if (this.config.anonKey) {
           headers.apikey = this.config.anonKey;
           headers.Authorization = `Bearer ${this.config.anonKey}`;
@@ -452,19 +452,20 @@
 
         const data = await res.json();
 
+        // ✅ NEW: if backend says role filtering is disabled, we show everything (demo mode)
+        const bypassRoleFilter = Boolean(data && data.disableRoleFilter);
+
         const allSources = Array.isArray(data.sources) ? data.sources : [];
-        const visibleSources = filterSourcesByRole(allSources, this.config.role);
 
-        let answer = (data.answer || "No answer returned.").toString();
+        // If bypassing, do NOT hide admin sources for user demo.
+        const visibleSources = bypassRoleFilter
+          ? allSources
+          : filterSourcesByRole(allSources, this.config.role);
 
-        if (
-          this.config.role !== "admin" &&
-          allSources.length > 0 &&
-          visibleSources.length === 0
-        ) {
-          answer = "This action requires administrator access. Please contact your admin.";
-        }
+        const answer = (data.answer || "No answer returned.").toString();
 
+        // ✅ CRITICAL FIX: do NOT override the backend answer here.
+        // The backend should decide access. The widget should display.
         this.removeThinking();
         this.appendAssistant(answer, visibleSources);
       } catch (err) {
