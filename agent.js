@@ -58,6 +58,19 @@
   function log(...args) {
     if (config.debug) console.log("[Blynk Agent]", ...args);
   }
+   function sourceIcon(source) {
+     if (source.type === "article") return "📘";
+   
+     const name = (source.file_name || "").toLowerCase();
+   
+     if (name.endsWith(".pdf")) return "📄";
+     if (name.endsWith(".gif")) return "🎞️";
+     if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg")) return "🖼️";
+     if (name.endsWith(".doc") || name.endsWith(".docx")) return "📝";
+     if (name.endsWith(".xls") || name.endsWith(".xlsx")) return "📊";
+   
+     return "📎"; // fallback for unknown files
+   }
 
   function injectStylesOnce() {
     if (document.getElementById(STYLE_ID)) return;
