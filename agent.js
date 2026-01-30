@@ -58,19 +58,25 @@
   function log(...args) {
     if (config.debug) console.log("[Blynk Agent]", ...args);
   }
-   function sourceIcon(source) {
-     if (source.type === "article") return "📘";
-   
-     const name = (source.file_name || "").toLowerCase();
-   
-     if (name.endsWith(".pdf")) return "📄";
-     if (name.endsWith(".gif")) return "🎞️";
-     if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg")) return "🖼️";
-     if (name.endsWith(".doc") || name.endsWith(".docx")) return "📝";
-     if (name.endsWith(".xls") || name.endsWith(".xlsx")) return "📊";
-   
-     return "📎"; // fallback for unknown files
-   }
+
+  // ✅ Source icons for links
+  function sourceIcon(source) {
+    // articles/guides
+    if (source && source.type === "article") return "📘";
+
+    // files
+    const name = ((source && source.file_name) || (source && source.title) || "")
+      .toString()
+      .toLowerCase();
+
+    if (name.endsWith(".pdf")) return "📄";
+    if (name.endsWith(".gif")) return "🎞️";
+    if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg")) return "🖼️";
+    if (name.endsWith(".doc") || name.endsWith(".docx")) return "📝";
+    if (name.endsWith(".xls") || name.endsWith(".xlsx")) return "📊";
+
+    return "📎";
+  }
 
   function injectStylesOnce() {
     if (document.getElementById(STYLE_ID)) return;
@@ -233,11 +239,10 @@
     if (role === "admin") return sources;
 
     return sources.filter((s) => {
-      const ar =
-        (s && (s.audience_role || s.audienceRole || "user"))
-          .toString()
-          .toLowerCase()
-          .trim();
+      const ar = (s && (s.audience_role || s.audienceRole || "user"))
+        .toString()
+        .toLowerCase()
+        .trim();
       return ar === "user";
     });
   }
@@ -365,6 +370,7 @@
 
       if (Array.isArray(sources) && sources.length) {
         const sourcesEl = el("div", { class: "blynk-sources" });
+
         sources.slice(0, 5).forEach((s) => {
           const href = safeLink(s.url);
           if (!href) return;
@@ -375,9 +381,14 @@
             target: "_blank",
             rel: "noopener noreferrer",
           });
-          a.textContent = s.title || href;
+
+          // ✅ ICON + TITLE
+          const icon = sourceIcon(s);
+          a.textContent = `${icon} ${s.title || href}`;
+
           sourcesEl.appendChild(a);
         });
+
         bubble.appendChild(sourcesEl);
       }
 
@@ -466,7 +477,9 @@
         const data = await res.json();
 
         // If backend says role filtering is disabled, show everything (demo mode)
-        const bypassRoleFilter = Boolean(data && (data.disableRoleFilter || data.disable_role_filter));
+        const bypassRoleFilter = Boolean(
+          data && (data.disableRoleFilter || data.disable_role_filter)
+        );
 
         const allSources = Array.isArray(data?.sources) ? data.sources : [];
 
@@ -477,7 +490,6 @@
 
         const answer = (data?.answer || "No answer returned.").toString();
 
-        // CRITICAL: do NOT override the backend answer here.
         this.removeThinking();
         this.appendAssistant(answer, visibleSources);
       } catch (err) {
