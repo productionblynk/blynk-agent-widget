@@ -420,14 +420,14 @@
           clientId: this.config.clientId,
           mode: this.config.mode,
           role: this.config.role,
-          debug: this.config.debug, // ✅ enables backend debug output
+          debug: this.config.debug, // enables backend debug output
         };
 
         const headers = {
           "Content-Type": "application/json",
         };
 
-        // ✅ Auth headers for Supabase Edge Functions when verify_jwt is enabled
+        // Auth headers for Supabase Edge Functions when verify_jwt is enabled
         if (this.config.anonKey) {
           headers.apikey = this.config.anonKey;
           headers.Authorization = `Bearer ${this.config.anonKey}`;
@@ -452,20 +452,19 @@
 
         const data = await res.json();
 
-        // ✅ NEW: if backend says role filtering is disabled, we show everything (demo mode)
-        const bypassRoleFilter = Boolean(data && data.disableRoleFilter);
+        // If backend says role filtering is disabled, show everything (demo mode)
+        const bypassRoleFilter = Boolean(data && (data.disableRoleFilter || data.disable_role_filter));
 
-        const allSources = Array.isArray(data.sources) ? data.sources : [];
+        const allSources = Array.isArray(data?.sources) ? data.sources : [];
 
         // If bypassing, do NOT hide admin sources for user demo.
         const visibleSources = bypassRoleFilter
           ? allSources
           : filterSourcesByRole(allSources, this.config.role);
 
-        const answer = (data.answer || "No answer returned.").toString();
+        const answer = (data?.answer || "No answer returned.").toString();
 
-        // ✅ CRITICAL FIX: do NOT override the backend answer here.
-        // The backend should decide access. The widget should display.
+        // CRITICAL: do NOT override the backend answer here.
         this.removeThinking();
         this.appendAssistant(answer, visibleSources);
       } catch (err) {
