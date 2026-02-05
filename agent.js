@@ -1,6 +1,10 @@
 /* =====================================================
-   B-lynk Agent Widget — Phase 1
-   Vanilla JS | Auto-boot | UI Renderer
+   B-lynk Agent Widget — Phase 1 (Refreshed UI Skin)
+   Vanilla JS | Auto-boot | UI Renderer + Supabase Ask
+   - Uses frosty "Blynky" UI
+   - Scoped styles (no global :root/body/html selectors)
+   - Supports tenant avatar via tenants.profile_icon (default fallback)
+   - Supports optional tenant accent colors (if returned)
 ===================================================== */
 
 (function () {
@@ -24,24 +28,46 @@
   const DEFAULT_PROFILE_ICON =
     "https://blynk-images.s3.us-west-2.amazonaws.com/ai-agent/profile-icons/smart-blynky.png";
 
+  const ROOT_ID = "blynk-agent-root";
+  const STYLE_ID = "blynk-agent-style";
+
+  // -------------------------
+  // CONFIG (from <script ...data-*>)
+  // -------------------------
   const config = {
     clientId: scriptEl.getAttribute("data-client-id") || "blynk-default",
-    apiUrl: scriptEl.getAttribute("data-api-url"), // full supabase function URL
+    apiUrl: scriptEl.getAttribute("data-api-url"), // full supabase function URL (ask)
     mode: scriptEl.getAttribute("data-mode") || "blynk_kb",
     debug: scriptEl.hasAttribute("data-debug"),
-    title: scriptEl.getAttribute("data-title") || "Support",
 
-    // IMPORTANT: public anon key for calling the Edge Function (fixes 401)
+    // text
+    title: scriptEl.getAttribute("data-title") || "Blynky",
+    kicker: scriptEl.getAttribute("data-kicker") || "Ask",
+    subcopy:
+      scriptEl.getAttribute("data-subcopy") ||
+      "Blynky will search articles and assist you with your questions.",
+
+    // keys / role hints
     anonKey: scriptEl.getAttribute("data-anon-key") || "",
-
-    // UX role hint (controls what links you show)
     role: (scriptEl.getAttribute("data-role") || "user").toLowerCase(),
-
-    // Optional: only set this on admin pages for testing
     adminToken: scriptEl.getAttribute("data-admin-token") || "",
 
-    // Tenant-driven profile icon (loaded at runtime; fallback used)
-    profileIcon: scriptEl.getAttribute("data-profile-icon") || DEFAULT_PROFILE_ICON,
+    // Optional: if you want to point directly to a tenant settings function
+    // e.g. https://PROJECT.supabase.co/functions/v1/get_tenant_settings
+    settingsUrl: scriptEl.getAttribute("data-settings-url") || "",
+
+    // Optional UI quick actions (pipe-separated labels)
+    // Example: data-quick-actions="Reset password|Track order|Contact support"
+    quickActions:
+      scriptEl.getAttribute("data-quick-actions") ||
+      "Reset password|Track order|Contact support",
+
+    // Optional explicit accent overrides
+    accentCoral: scriptEl.getAttribute("data-accent-coral") || "",
+    accentMint: scriptEl.getAttribute("data-accent-mint") || "",
+
+    // Optional explicit profile icon override
+    profileIcon: scriptEl.getAttribute("data-profile-icon") || "",
   };
 
   if (!config.apiUrl || !/^https?:\/\//i.test(config.apiUrl)) {
@@ -51,26 +77,28 @@
     return;
   }
 
-  // If your function requires JWT verification, anonKey MUST be present.
   if (!config.anonKey) {
     console.warn(
       "[Blynk Agent] Missing data-anon-key. If your function requires Authorization, you will get 401 until you add it."
     );
   }
 
-  const ROOT_ID = "blynk-agent-root";
-  const STYLE_ID = "blynk-agent-style";
-
   function log(...args) {
     if (config.debug) console.log("[Blynk Agent]", ...args);
   }
 
+  function safeLink(url) {
+    try {
+      return new URL(url, window.location.href).href;
+    } catch {
+      return null;
+    }
+  }
+
   // ✅ Source icons for links
   function sourceIcon(source) {
-    // articles/guides
     if (source && source.type === "article") return "📘";
 
-    // files
     const name = ((source && source.file_name) || (source && source.title) || "")
       .toString()
       .toLowerCase();
@@ -82,179 +110,6 @@
     if (name.endsWith(".xls") || name.endsWith(".xlsx")) return "📊";
 
     return "📎";
-  }
-
-  function injectStylesOnce() {
-    if (document.getElementById(STYLE_ID)) return;
-    const style = document.createElement("style");
-    style.id = STYLE_ID;
-    style.textContent = `
-      #${ROOT_ID} { all: initial; }
-      #${ROOT_ID} * { box-sizing: border-box; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-
-      .blynk-wrap {
-        position: fixed;
-        bottom: 24px;
-        right: 24px;
-        z-index: 999999;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-        align-items: flex-end;
-      }
-
-      .blynk-launcher {
-        width: 56px; height: 56px; border-radius: 999px; border: none; cursor: pointer;
-        display: flex; align-items: center; justify-content: center;
-        box-shadow: 0 12px 30px rgba(0,0,0,0.18);
-        background: #111; color: #fff;
-      }
-
-      .blynk-panel {
-        width: 360px; max-width: calc(100vw - 32px);
-        height: 520px; max-height: calc(100vh - 120px);
-        background: #fff; color: #111;
-        border-radius: 18px;
-        box-shadow: 0 20px 60px rgba(0,0,0,0.20);
-        overflow: hidden;
-        display: none;
-        flex-direction: column;
-      }
-      .blynk-panel.open { display: flex; }
-
-      .blynk-header {
-        padding: 14px 14px;
-        border-bottom: 1px solid rgba(0,0,0,0.08);
-        display: flex; align-items: center; justify-content: space-between;
-        background: #fff;
-      }
-
-      /* ✅ Header left cluster (icon + title) */
-      .blynk-header-left {
-        display: inline-flex;
-        align-items: center;
-        gap: 10px;
-        min-width: 0;
-      }
-
-      .blynk-avatar {
-        width: 28px;
-        height: 28px;
-        border-radius: 999px;
-        flex: 0 0 28px;
-        object-fit: cover;
-        display: block;
-      }
-
-      .blynk-title { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-      .blynk-close {
-        border: none; background: transparent; cursor: pointer;
-        font-size: 18px; line-height: 1; padding: 6px 8px; border-radius: 10px;
-      }
-      .blynk-close:hover { background: rgba(0,0,0,0.05); }
-
-      .blynk-thread {
-        flex: 1;
-        padding: 14px;
-        overflow: auto;
-        background: #fafafa;
-      }
-      .blynk-row { display: flex; margin-bottom: 10px; }
-      .blynk-row.user { justify-content: flex-end; }
-      .blynk-row.assistant { justify-content: flex-start; }
-
-      .blynk-bubble {
-        max-width: 82%;
-        border-radius: 16px;
-        padding: 10px 12px;
-        font-size: 13px;
-        line-height: 1.4;
-        white-space: pre-wrap;
-        word-wrap: break-word;
-      }
-      .blynk-bubble.user {
-        background: #111; color: #fff; border-bottom-right-radius: 6px;
-      }
-      .blynk-bubble.assistant {
-        background: #fff; color: #111; border: 1px solid rgba(0,0,0,0.08);
-        border-bottom-left-radius: 6px;
-      }
-
-      .blynk-sources {
-        margin-top: 8px;
-        padding-top: 8px;
-        border-top: 1px solid rgba(0,0,0,0.06);
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-      }
-      .blynk-source {
-        font-size: 12px;
-        color: #0b57d0;
-        text-decoration: none;
-        display: inline-flex;
-        gap: 6px;
-        align-items: center;
-      }
-      .blynk-source:hover { text-decoration: underline; }
-
-      .blynk-composer {
-        padding: 12px;
-        border-top: 1px solid rgba(0,0,0,0.08);
-        background: #fff;
-        display: flex;
-        gap: 8px;
-        align-items: flex-end;
-      }
-      .blynk-input {
-        flex: 1;
-        min-height: 38px;
-        max-height: 120px;
-        resize: none;
-        padding: 10px 10px;
-        font-size: 13px;
-        line-height: 1.3;
-        border-radius: 12px;
-        border: 1px solid rgba(0,0,0,0.18);
-        outline: none;
-      }
-      .blynk-send {
-        border: none; cursor: pointer;
-        height: 38px; padding: 0 14px;
-        border-radius: 12px;
-        background: #111; color: #fff;
-        font-size: 13px; font-weight: 600;
-      }
-      .blynk-send:disabled { opacity: 0.5; cursor: not-allowed; }
-    `;
-    document.head.appendChild(style);
-  }
-
-  function createRoot() {
-    if (document.getElementById(ROOT_ID)) return;
-    const root = document.createElement("div");
-    root.id = ROOT_ID;
-    document.body.appendChild(root);
-  }
-
-  function el(tag, attrs = {}, children = []) {
-    const node = document.createElement(tag);
-    Object.entries(attrs).forEach(([k, v]) => {
-      if (k === "class") node.className = v;
-      else if (k === "text") node.textContent = v;
-      else node.setAttribute(k, v);
-    });
-    children.forEach((c) => node.appendChild(c));
-    return node;
-  }
-
-  function safeLink(url) {
-    try {
-      return new URL(url, window.location.href).href;
-    } catch {
-      return null;
-    }
   }
 
   // UI-only source filtering (used only when backend is enforcing RBAC)
@@ -271,159 +126,675 @@
     });
   }
 
-  function buildTenantSettingsUrlFromAskUrl(askUrl) {
-    // askUrl: https://.../functions/v1/ask -> https://.../functions/v1/update_tenant_settings
+  // -------------------------
+  // TENANT SETTINGS (avatar/theme)
+  // -------------------------
+  function apiBaseFromAskUrl(askUrl) {
+    // https://xxx.supabase.co/functions/v1/ask -> https://xxx.supabase.co/functions/v1
     try {
       const u = new URL(askUrl);
-      u.pathname = u.pathname.replace(/\/ask\/?$/, "/update_tenant_settings");
-      if (!/\/update_tenant_settings$/.test(u.pathname)) {
-        // fallback: replace the last segment with update_tenant_settings
-        u.pathname = u.pathname.replace(/\/[^/]+$/, "/update_tenant_settings");
+      const parts = u.pathname.split("/").filter(Boolean);
+      // expects ["functions","v1","ask"]
+      if (parts.length >= 2) {
+        u.pathname = "/" + parts.slice(0, 2).join("/");
       }
+      u.search = "";
+      u.hash = "";
       return u.toString();
     } catch {
-      return null;
+      return "";
     }
   }
 
-  async function fetchTenantSettings(tenantId) {
-    const base = buildTenantSettingsUrlFromAskUrl(config.apiUrl);
-    if (!base) return null;
+  async function fetchTenantSettings() {
+    const apiBase = apiBaseFromAskUrl(config.apiUrl);
+    const candidates = [];
 
-    const url = `${base}?tenantId=${encodeURIComponent(tenantId)}`;
+    // Prefer explicit settings URL if provided
+    if (config.settingsUrl) candidates.push(config.settingsUrl);
 
-    const headers = {};
-    if (config.anonKey) {
-      headers.apikey = config.anonKey;
-      headers.Authorization = `Bearer ${config.anonKey}`;
+    // Try common function names (safe fallback order)
+    if (apiBase) {
+      candidates.push(`${apiBase}/get_tenant_settings`);
+      candidates.push(`${apiBase}/update_tenant_settings`); // your GET handler already returns settings
     }
 
-    const res = await fetch(url, { method: "GET", headers });
-    if (!res.ok) {
-      const t = await res.text().catch(() => "");
-      log("Tenant settings GET failed:", res.status, t);
-      return null;
+    if (!candidates.length) return null;
+
+    for (const baseUrl of candidates) {
+      try {
+        const url = `${baseUrl}?tenantId=${encodeURIComponent(config.clientId)}`;
+        const res = await fetch(url, {
+          method: "GET",
+          headers: {
+            apikey: config.anonKey,
+            Authorization: `Bearer ${config.anonKey}`,
+          },
+        });
+
+        if (!res.ok) continue;
+
+        const data = await res.json().catch(() => null);
+        if (data && (data.ok === true || data.tenantId || data.id)) {
+          return data;
+        }
+      } catch (_e) {
+        // ignore and keep trying
+      }
     }
 
-    const json = await res.json().catch(() => null);
-    return json;
+    return null;
   }
 
+  // -------------------------
+  // DOM helpers
+  // -------------------------
+  function createRoot() {
+    if (document.getElementById(ROOT_ID)) return document.getElementById(ROOT_ID);
+    const root = document.createElement("div");
+    root.id = ROOT_ID;
+    document.body.appendChild(root);
+    return root;
+  }
+
+  function el(tag, attrs = {}, children = []) {
+    const node = document.createElement(tag);
+    Object.entries(attrs).forEach(([k, v]) => {
+      if (k === "class") node.className = v;
+      else if (k === "text") node.textContent = v;
+      else if (k === "html") node.innerHTML = v;
+      else node.setAttribute(k, v);
+    });
+    children.forEach((c) => node.appendChild(c));
+    return node;
+  }
+
+  function injectStylesOnce() {
+    if (document.getElementById(STYLE_ID)) return;
+
+    const style = document.createElement("style");
+    style.id = STYLE_ID;
+
+    // NOTE: Everything is scoped under #blynk-agent-root to avoid "gotchas"
+    style.textContent = `
+#${ROOT_ID}{all:initial}
+#${ROOT_ID} *{box-sizing:border-box;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,"Helvetica Neue",sans-serif}
+
+#${ROOT_ID} .blynk-wrap{
+  position:fixed; bottom:24px; right:24px; z-index:999999;
+  display:flex; flex-direction:column; gap:10px; align-items:flex-end;
+}
+
+#${ROOT_ID} .blynk-launcher{
+  width:56px; height:56px; border-radius:999px; border:none; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  box-shadow:0 12px 30px rgba(0,0,0,0.18);
+  background:#fff; color:#000;
+}
+
+#${ROOT_ID} .blynk-panel{
+  width:360px; max-width:calc(100vw - 32px);
+  height:720px; max-height:calc(100vh - 120px);
+  border-radius:24px;
+  overflow:hidden;
+  display:none;
+}
+#${ROOT_ID} .blynk-panel.open{display:block}
+
+/* ---- Scoped theme vars (no global :root) ---- */
+#${ROOT_ID} .blynk-widget{
+  --accent-coral: ${config.accentCoral || "#ed5b4e"};
+  --accent-mint: ${config.accentMint || "#6ecace"};
+  --ink:#504d61;
+  --shadow: rgba(80, 77, 97, 0.08);
+  --radius-xl: 24px;
+  --blur: 18px;
+  --ease: cubic-bezier(.2,.8,.2,1);
+  --ease-soft: cubic-bezier(.22,.9,.2,1);
+
+  position:relative;
+  width:100%;
+  height:100%;
+  border-radius:var(--radius-xl);
+  display:grid;
+  grid-template-rows:auto 1fr auto;
+}
+
+/* frosty gradient behind everything (inside widget only) */
+#${ROOT_ID} .blynk-widget::before{
+  content:"";
+  position:absolute;
+  inset:-40px;
+  z-index:0;
+  background:
+    radial-gradient(220px 220px at 18% 18%, rgba(110,202,206,.55), transparent 60%),
+    radial-gradient(240px 240px at 82% 28%, rgba(237,91,78,.45), transparent 62%),
+    radial-gradient(260px 260px at 55% 85%, rgba(110,202,206,.35), transparent 62%),
+    linear-gradient(180deg, rgba(255,255,255,.55), rgba(255,255,255,.35));
+  filter: blur(22px) saturate(1.2);
+  opacity:.9;
+  pointer-events:none;
+}
+#${ROOT_ID} .blynk-widget::after{
+  content:"";
+  position:absolute;
+  inset:0;
+  z-index:1;
+  background: linear-gradient(180deg, rgba(255,255,255,.62), rgba(255,255,255,.44));
+  border: 1px solid rgba(80,77,97,.10);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 26px 90px rgba(80,77,97,.08), inset 0 1px 0 rgba(255,255,255,.65);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  pointer-events:none;
+}
+
+/* make UI above layers */
+#${ROOT_ID} .blynk-head,
+#${ROOT_ID} .blynk-stage,
+#${ROOT_ID} .blynk-composer{
+  position:relative;
+  z-index:2;
+}
+
+/* ---- Header ---- */
+#${ROOT_ID} .blynk-head{
+  position:sticky; top:0; z-index:5;
+  background: linear-gradient(180deg, rgba(255,255,255,.82), rgba(255,255,255,.62));
+  backdrop-filter: blur(var(--blur));
+  -webkit-backdrop-filter: blur(var(--blur));
+  border-bottom: 1px solid rgba(80,77,97,.10);
+}
+#${ROOT_ID} .blynk-header{
+  padding:18px 16px 12px;
+  display:flex; align-items:flex-start; justify-content:space-between; gap:12px;
+}
+#${ROOT_ID} .blynk-brand{
+  display:flex; align-items:center; gap:12px; min-width:0;
+}
+#${ROOT_ID} .blynk-logo{
+  width:46px; height:46px; border-radius:999px;
+  border:1px solid rgba(80,77,97,.12);
+  background:
+    radial-gradient(circle at 30% 30%, rgba(237,91,78,.22), transparent 55%),
+    radial-gradient(circle at 70% 70%, rgba(110,202,206,.18), transparent 60%),
+    linear-gradient(180deg, rgba(255,255,255,.78), rgba(255,255,255,.55));
+  box-shadow: 0 18px 55px var(--shadow);
+  display:grid; place-items:center;
+  overflow:hidden;
+}
+#${ROOT_ID} .blynk-logoImg{
+  width:100%; height:100%; object-fit:cover; border-radius:999px; display:block;
+}
+#${ROOT_ID} .blynk-brandText{display:flex; flex-direction:column; gap:2px; min-width:0}
+#${ROOT_ID} .blynk-kicker{font-size:13px; font-weight:650; color: rgba(80,77,97,.78); line-height:1.1}
+#${ROOT_ID} .blynk-title{font-size:22px; font-weight:800; line-height:1.05; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+#${ROOT_ID} .blynk-close{
+  width:36px; height:36px; border-radius:14px;
+  border:1px solid rgba(80,77,97,.12);
+  background: rgba(255,255,255,.58);
+  box-shadow: 0 18px 55px var(--shadow);
+  display:grid; place-items:center; cursor:pointer;
+  transition: transform 220ms var(--ease), box-shadow 220ms var(--ease), border-color 220ms var(--ease);
+}
+#${ROOT_ID} .blynk-close:hover{
+  transform: translateY(-1px);
+  border-color: rgba(237,91,78,.28);
+  box-shadow: 0 26px 90px var(--shadow);
+}
+#${ROOT_ID} .blynk-x{font-size:18px; line-height:1; color: rgba(237,91,78,.85)}
+
+#${ROOT_ID} .blynk-subcopy{
+  padding: 0 16px 10px;
+  color: rgba(80,77,97,.72);
+  font-size:14px;
+  line-height:1.45;
+}
+#${ROOT_ID} .blynk-chips{display:flex; gap:8px; flex-wrap:wrap; padding: 0 16px 14px}
+#${ROOT_ID} .blynk-chip{
+  font-size:12px; padding:6px 10px; border-radius:999px;
+  border:1px solid rgba(80,77,97,.10);
+  background: rgba(255,255,255,.58);
+  cursor:pointer;
+  box-shadow: 0 18px 55px var(--shadow);
+  transition: transform 220ms var(--ease), border-color 220ms var(--ease);
+  user-select:none;
+}
+#${ROOT_ID} .blynk-chip:hover{transform: translateY(-1px); border-color: rgba(110,202,206,.28)}
+
+/* ---- Messages ---- */
+#${ROOT_ID} .blynk-stage{
+  padding: 14px 14px 10px;
+  overflow:auto;
+  scroll-behavior:smooth;
+  background: transparent;
+}
+#${ROOT_ID} .blynk-stage::-webkit-scrollbar{width:10px}
+#${ROOT_ID} .blynk-stage::-webkit-scrollbar-thumb{
+  background: rgba(80,77,97,.12);
+  border-radius:999px;
+  border: 2px solid rgba(255,255,255,.65);
+}
+#${ROOT_ID} .blynk-row{display:flex; gap:10px; align-items:flex-end; margin:10px 0}
+#${ROOT_ID} .blynk-row.ai{justify-content:flex-start}
+#${ROOT_ID} .blynk-row.user{justify-content:flex-end}
+#${ROOT_ID} .blynk-avatar{
+  width:30px; height:30px; border-radius:999px; overflow:hidden;
+  border:1px solid rgba(80,77,97,.12);
+  box-shadow: 0 18px 55px var(--shadow);
+  background:
+    radial-gradient(circle at 30% 30%, rgba(110,202,206,.40), transparent 55%),
+    radial-gradient(circle at 70% 70%, rgba(237,91,78,.26), transparent 60%),
+    linear-gradient(180deg, rgba(255,255,255,.78), rgba(255,255,255,.55));
+  flex:0 0 auto;
+}
+#${ROOT_ID} .blynk-avatar.user{
+  background:
+    radial-gradient(circle at 30% 30%, rgba(237,91,78,.30), transparent 55%),
+    radial-gradient(circle at 70% 70%, rgba(110,202,206,.18), transparent 60%),
+    linear-gradient(180deg, rgba(255,255,255,.78), rgba(255,255,255,.55));
+}
+#${ROOT_ID} .blynk-avatar img{width:100%; height:100%; object-fit:cover; display:block}
+
+#${ROOT_ID} .blynk-bubble{
+  max-width:74%;
+  padding:12px 14px;
+  border-radius:18px;
+  border:1px solid rgba(80,77,97,.08);
+  box-shadow: 0 18px 55px rgba(80,77,97,.06);
+  background: rgba(255,255,255,.62);
+  font-size:14px;
+  line-height:1.45;
+  position:relative;
+  overflow:hidden;
+  color: rgba(80,77,97,.92);
+}
+#${ROOT_ID} .blynk-bubble:before{
+  content:"";
+  position:absolute;
+  inset:-60px;
+  background: radial-gradient(circle at 20% 20%, rgba(255,255,255,.55), transparent 55%);
+  opacity:.55;
+  transform: rotate(10deg);
+  pointer-events:none;
+}
+#${ROOT_ID} .blynk-bubble.user{
+  background: linear-gradient(180deg, rgba(110,202,206,.30), rgba(110,202,206,.14));
+  border-color: rgba(110,202,206,.28);
+}
+#${ROOT_ID} .blynk-bubble.ai:after{
+  content:"";
+  position:absolute;
+  left:-6px; bottom:10px;
+  width:14px; height:14px;
+  background: rgba(255,255,255,.62);
+  border-left: 1px solid rgba(80,77,97,.10);
+  border-bottom: 1px solid rgba(80,77,97,.10);
+  transform: rotate(45deg);
+}
+#${ROOT_ID} .blynk-bubble.user:after{
+  content:"";
+  position:absolute;
+  right:-6px; bottom:10px;
+  width:14px; height:14px;
+  background: rgba(110,202,206,.16);
+  border-right: 1px solid rgba(110,202,206,.22);
+  border-top: 1px solid rgba(110,202,206,.10);
+  transform: rotate(45deg);
+}
+
+#${ROOT_ID} .blynk-enter{animation: blynkPopIn 380ms var(--ease-soft) both}
+@keyframes blynkPopIn{
+  from{transform: translateY(10px) scale(.98); opacity:0}
+  to{transform: translateY(0) scale(1); opacity:1}
+}
+
+#${ROOT_ID} .blynk-meta{
+  font-size:12px;
+  color: rgba(80,77,97,.52);
+  margin-top:4px;
+}
+#${ROOT_ID} .blynk-meta.ai{margin-left:40px}
+#${ROOT_ID} .blynk-meta.user{text-align:right; margin-right:40px}
+
+#${ROOT_ID} .blynk-typing{
+  display:inline-flex;
+  gap:6px;
+  align-items:center;
+  padding:10px 12px;
+  border-radius:999px;
+  border:1px solid rgba(80,77,97,.10);
+  background: rgba(255,255,255,.60);
+  box-shadow: 0 18px 55px var(--shadow);
+}
+#${ROOT_ID} .blynk-dot{
+  width:6px; height:6px; border-radius:999px;
+  background: rgba(80,77,97,.55);
+  animation: blynkBounce 900ms infinite;
+}
+#${ROOT_ID} .blynk-dot:nth-child(2){animation-delay:120ms}
+#${ROOT_ID} .blynk-dot:nth-child(3){animation-delay:240ms}
+@keyframes blynkBounce{
+  0%, 80%, 100%{transform: translateY(0); opacity:.45}
+  40%{transform: translateY(-4px); opacity:.85}
+}
+
+/* Sources (links) */
+#${ROOT_ID} .blynk-sources{
+  margin-top:10px;
+  padding-top:10px;
+  border-top: 1px solid rgba(80,77,97,.10);
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+#${ROOT_ID} .blynk-source{
+  font-size:12px;
+  color: rgba(80,77,97,.78);
+  text-decoration:none;
+  display:inline-flex;
+  gap:8px;
+  align-items:center;
+}
+#${ROOT_ID} .blynk-source:hover{text-decoration:underline}
+
+/* ---- Composer ---- */
+#${ROOT_ID} .blynk-composer{
+  padding:12px;
+  border-top:1px solid rgba(80,77,97,.10);
+  display:flex;
+  gap:10px;
+  align-items:center;
+  background: linear-gradient(180deg, rgba(255,255,255,.70), rgba(255,255,255,.56));
+  backdrop-filter: blur(var(--blur));
+  -webkit-backdrop-filter: blur(var(--blur));
+}
+#${ROOT_ID} .blynk-inputWrap{
+  flex:1;
+  height:44px;
+  border-radius:16px;
+  border:1px solid rgba(80,77,97,.12);
+  background: rgba(255,255,255,.62);
+  box-shadow: 0 18px 55px var(--shadow);
+  display:flex;
+  align-items:center;
+  padding:0 12px;
+  position:relative;
+  overflow:hidden;
+}
+#${ROOT_ID} .blynk-inputWrap:before{
+  content:"";
+  position:absolute;
+  left:-20%; right:-20%; bottom:-60%;
+  height:130%;
+  background: radial-gradient(closest-side, rgba(255,255,255,.80), transparent 60%);
+  opacity:0;
+  transform: translateY(10px);
+  transition: opacity 220ms var(--ease), transform 220ms var(--ease);
+  pointer-events:none;
+}
+#${ROOT_ID} .blynk-inputWrap:focus-within:before{
+  opacity:.8;
+  transform: translateY(0);
+}
+#${ROOT_ID} .blynk-input{
+  width:100%;
+  border:0;
+  outline:0;
+  font-size:14px;
+  background:transparent;
+  color: rgba(80,77,97,.92);
+}
+#${ROOT_ID} .blynk-input::placeholder{color: rgba(80,77,97,.45)}
+
+#${ROOT_ID} .blynk-send{
+  height:44px;
+  min-width:78px;
+  padding:0 14px;
+  border-radius:14px;
+  border:1px solid rgba(80,77,97,.12);
+  background: linear-gradient(180deg, rgba(237,91,78,.22), rgba(237,91,78,.14));
+  box-shadow: 0 18px 55px var(--shadow);
+  cursor:pointer;
+  font-weight:750;
+  color: rgba(80,77,97,.92);
+  transition: transform 220ms var(--ease), box-shadow 220ms var(--ease), filter 220ms var(--ease);
+}
+#${ROOT_ID} .blynk-send:hover{transform: translateY(-1px); box-shadow: 0 26px 90px var(--shadow); filter: brightness(1.02)}
+#${ROOT_ID} .blynk-send:active{transform: translateY(0)}
+#${ROOT_ID} .blynk-send:disabled{opacity:.55; cursor:not-allowed}
+
+@media (prefers-reduced-motion: reduce){
+  #${ROOT_ID} *{animation:none !important; transition:none !important; scroll-behavior:auto !important}
+}
+    `;
+
+    document.head.appendChild(style);
+  }
+
+  // -------------------------
+  // Widget
+  // -------------------------
   const Agent = {
     config,
     root: null,
     isOpen: false,
     ui: {},
-    _thinkingEl: null,
+    tenant: {
+      profile_icon: config.profileIcon || DEFAULT_PROFILE_ICON,
+      accent_coral: config.accentCoral || "",
+      accent_mint: config.accentMint || "",
+      title: config.title,
+    },
+    _typingRow: null,
 
     async init() {
       injectStylesOnce();
-      createRoot();
-      this.root = document.getElementById(ROOT_ID);
+      this.root = createRoot();
 
-      // ✅ Load tenant settings (profile icon) before mounting UI
+      // Try to load tenant settings (avatar/theme) without breaking if missing
       try {
-        const settings = await fetchTenantSettings(this.config.clientId);
-        if (settings && typeof settings.profile_icon === "string" && settings.profile_icon.trim()) {
-          this.config.profileIcon = settings.profile_icon.trim();
+        const t = await fetchTenantSettings();
+        if (t) {
+          // avatar column (you added profile_icon)
+          const icon =
+            t.profile_icon ||
+            (t.tenant && t.tenant.profile_icon) ||
+            t.profileIcon ||
+            DEFAULT_PROFILE_ICON;
+
+          this.tenant.profile_icon = (icon || "").toString().trim() || DEFAULT_PROFILE_ICON;
+
+          // Optional theme support (if you add columns later)
+          const coral =
+            t.accent_coral ||
+            t.accentCoral ||
+            (t.theme && t.theme.accent_coral) ||
+            "";
+          const mint =
+            t.accent_mint ||
+            t.accentMint ||
+            (t.theme && t.theme.accent_mint) ||
+            "";
+
+          if (coral) this.tenant.accent_coral = String(coral);
+          if (mint) this.tenant.accent_mint = String(mint);
+
+          // Optional tenant display name/title
+          const tenantTitle = t.title || t.widget_title || t.tenant_title || "";
+          if (tenantTitle) this.tenant.title = String(tenantTitle);
+
+          log("Tenant settings loaded:", t);
         }
       } catch (e) {
-        // non-fatal
-        log("Tenant settings load error:", e);
+        log("Tenant settings load skipped:", e);
       }
 
       this.mountUI();
-      log("Initialized", { config: this.config });
+      log("Initialized", { config: this.config, tenant: this.tenant });
     },
 
     mountUI() {
+      // wrapper
       const wrap = el("div", { class: "blynk-wrap" });
 
-      const launcher = el("button", {
-        class: "blynk-launcher",
-        type: "button",
-        title: "Open support chat",
-      });
-      launcher.addEventListener("click", () => this.toggle());
-      launcher.innerHTML = `
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M4 5.5C4 4.67 4.67 4 5.5 4h13C19.33 4 20 4.67 20 5.5v9c0 .83-.67 1.5-1.5 1.5H9l-4.2 3.15c-.5.38-1.2.02-1.2-.6V5.5Z"
-                stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
-        </svg>
-      `;
-
+      // panel
       const panel = el("div", {
         class: "blynk-panel",
         role: "dialog",
         "aria-label": "Support chat",
       });
 
-      const closeBtn = el("button", {
-        class: "blynk-close",
-        type: "button",
-        "aria-label": "Close",
-      });
-      closeBtn.textContent = "×";
-      closeBtn.addEventListener("click", () => this.close());
-
-      // ✅ avatar + title (top-left)
-      const avatar = el("img", {
-        class: "blynk-avatar",
-        src: this.config.profileIcon || DEFAULT_PROFILE_ICON,
-        alt: "Profile",
-      });
-      // fallback if image fails to load
-      avatar.addEventListener("error", () => {
-        avatar.src = DEFAULT_PROFILE_ICON;
+      // widget (inside panel)
+      const widget = el("div", {
+        class: "blynk-widget",
+        role: "application",
+        "aria-label": "Ask Blynky chat widget",
       });
 
-      const headerLeft = el("div", { class: "blynk-header-left" }, [
-        avatar,
-        el("div", { class: "blynk-title", text: this.config.title }),
+      // apply tenant accents if present
+      if (this.tenant.accent_coral) widget.style.setProperty("--accent-coral", this.tenant.accent_coral);
+      if (this.tenant.accent_mint) widget.style.setProperty("--accent-mint", this.tenant.accent_mint);
+
+      // header block
+      const head = el("div", { class: "blynk-head" });
+
+      const headerRow = el("div", { class: "blynk-header" });
+
+      const brand = el("div", { class: "blynk-brand" });
+
+      // logo (image if available, otherwise fallback svg)
+      const logo = el("div", { class: "blynk-logo", "aria-hidden": "true" });
+      const logoImg = el("img", {
+        class: "blynk-logoImg",
+        alt: "",
+        src: this.tenant.profile_icon || DEFAULT_PROFILE_ICON,
+      });
+      logo.appendChild(logoImg);
+
+      const brandText = el("div", { class: "blynk-brandText" }, [
+        el("div", { class: "blynk-kicker", text: this.config.kicker }),
+        el("div", { class: "blynk-title", text: this.tenant.title || this.config.title }),
       ]);
 
-      const header = el("div", { class: "blynk-header" }, [headerLeft, closeBtn]);
+      brand.appendChild(logo);
+      brand.appendChild(brandText);
 
-      const thread = el("div", { class: "blynk-thread" });
+      const closeBtn = el("button", { class: "blynk-close", type: "button", "aria-label": "Close" }, [
+        el("span", { class: "blynk-x", text: "×" }),
+      ]);
+      closeBtn.addEventListener("click", () => this.close());
 
-      const input = el("textarea", {
+      headerRow.appendChild(brand);
+      headerRow.appendChild(closeBtn);
+
+      const subcopy = el("div", { class: "blynk-subcopy", text: this.config.subcopy });
+
+      const chips = el("div", { class: "blynk-chips", "aria-label": "Quick replies" });
+
+      const actions = (this.config.quickActions || "")
+        .split("|")
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+      actions.forEach((label) => {
+        const chip = el("div", { class: "blynk-chip", text: label });
+        chip.setAttribute("data-chip", label);
+        chip.addEventListener("click", () => {
+          this.ui.input.value = label;
+          this.ui.input.focus();
+          chip.animate(
+            [{ transform: "translateY(0)" }, { transform: "translateY(-2px)" }, { transform: "translateY(0)" }],
+            { duration: 240, easing: "cubic-bezier(.2,.8,.2,1)" }
+          );
+        });
+        chips.appendChild(chip);
+      });
+
+      head.appendChild(headerRow);
+      head.appendChild(subcopy);
+      head.appendChild(chips);
+
+      // stage
+      const stage = el("div", { class: "blynk-stage" });
+      stage.id = "blynkStage"; // scoped id but not relied upon
+
+      // initial hello
+      stage.appendChild(this._msgRow({ role: "ai", text: "Hi! How can I help today?", meta: "Blynky • just now" }));
+
+      // typing row
+      const typingRow = el("div", { class: "blynk-row ai" });
+      const typingAvatar = el("div", { class: "blynk-avatar ai", "aria-hidden": "true" }, [
+        el("img", { alt: "", src: this.tenant.profile_icon || DEFAULT_PROFILE_ICON }),
+      ]);
+      const typingBubble = el("div", { class: "blynk-typing", "aria-label": "Blynky typing" }, [
+        el("div", { class: "blynk-dot" }),
+        el("div", { class: "blynk-dot" }),
+        el("div", { class: "blynk-dot" }),
+      ]);
+      typingRow.appendChild(typingAvatar);
+      typingRow.appendChild(typingBubble);
+      typingRow.style.display = "none";
+      stage.appendChild(typingRow);
+
+      this._typingRow = typingRow;
+
+      // composer
+      const composer = el("div", { class: "blynk-composer" });
+
+      const inputWrap = el("div", { class: "blynk-inputWrap" });
+      const input = el("input", {
         class: "blynk-input",
-        placeholder: "Ask a question…",
-        rows: "1",
+        id: "blynkInput",
+        type: "text",
+        placeholder: "Ask a question...",
+        autocomplete: "off",
       });
+      inputWrap.appendChild(input);
 
-      input.addEventListener("input", () => {
-        input.style.height = "auto";
-        input.style.height = Math.min(input.scrollHeight, 120) + "px";
-      });
+      const sendBtn = el("button", { class: "blynk-send", id: "blynkSendBtn", type: "button", text: "Send" });
 
-      const sendBtn = el("button", {
-        class: "blynk-send",
-        type: "button",
-        text: "Send",
-      });
       sendBtn.addEventListener("click", () => this.handleSend());
-
       input.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && !e.shiftKey) {
+        if (e.key === "Enter") {
           e.preventDefault();
           this.handleSend();
         }
       });
 
-      const composer = el("div", { class: "blynk-composer" }, [input, sendBtn]);
+      composer.appendChild(inputWrap);
+      composer.appendChild(sendBtn);
 
-      panel.appendChild(header);
-      panel.appendChild(thread);
-      panel.appendChild(composer);
+      // assemble widget
+      widget.appendChild(head);
+      widget.appendChild(stage);
+      widget.appendChild(composer);
+
+      // panel content
+      panel.appendChild(widget);
+
+      // launcher button
+      const launcher = el("button", {
+        class: "blynk-launcher",
+        type: "button",
+        title: "Open support chat",
+      });
+      launcher.innerHTML = `
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M4 5.5C4 4.67 4.67 4 5.5 4h13C19.33 4 20 4.67 20 5.5v9c0 .83-.67 1.5-1.5 1.5H9l-4.2 3.15c-.5.38-1.2.02-1.2-.6V5.5Z"
+                stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+        </svg>
+      `;
+      launcher.addEventListener("click", () => this.toggle());
 
       wrap.appendChild(panel);
       wrap.appendChild(launcher);
       this.root.appendChild(wrap);
 
-      this.ui = { wrap, launcher, panel, header, headerLeft, avatar, thread, input, sendBtn };
+      this.ui = { wrap, panel, widget, head, stage, composer, input, sendBtn, launcher };
 
-      this.appendAssistant("Hi! How can I help today?");
+      // open/closed default: closed
+      this.close();
     },
 
     open() {
@@ -442,17 +813,33 @@
       this.isOpen ? this.close() : this.open();
     },
 
-    appendUser(text) {
-      const row = el("div", { class: "blynk-row user" });
-      const bubble = el("div", { class: "blynk-bubble user", text });
-      row.appendChild(bubble);
-      this.ui.thread.appendChild(row);
-      this.scrollToBottom();
+    scrollToBottom() {
+      const t = this.ui.stage;
+      t.scrollTop = t.scrollHeight;
     },
 
-    appendAssistant(text, sources) {
-      const row = el("div", { class: "blynk-row assistant" });
-      const bubble = el("div", { class: "blynk-bubble assistant" });
+    setTyping(on) {
+      if (!this._typingRow) return;
+      this._typingRow.style.display = on ? "flex" : "none";
+      if (on) this.scrollToBottom();
+    },
+
+    setSending(isSending) {
+      this.ui.sendBtn.disabled = isSending;
+      this.ui.input.disabled = isSending;
+    },
+
+    _msgRow({ role, text, meta, sources }) {
+      const row = el("div", { class: `blynk-row ${role}` });
+
+      const av = el("div", { class: `blynk-avatar ${role}`, "aria-hidden": "true" });
+      if (role === "ai") {
+        av.appendChild(el("img", { alt: "", src: this.tenant.profile_icon || DEFAULT_PROFILE_ICON }));
+      }
+
+      const wrap = el("div");
+
+      const bubble = el("div", { class: `blynk-bubble ${role} blynk-enter` });
       bubble.textContent = text;
 
       if (Array.isArray(sources) && sources.length) {
@@ -469,61 +856,48 @@
             rel: "noopener noreferrer",
           });
 
-          // ✅ ICON + TITLE
           const icon = sourceIcon(s);
           a.textContent = `${icon} ${s.title || href}`;
-
           sourcesEl.appendChild(a);
         });
 
         bubble.appendChild(sourcesEl);
       }
 
-      row.appendChild(bubble);
-      this.ui.thread.appendChild(row);
-      this.scrollToBottom();
-    },
+      const m = el("div", { class: `blynk-meta ${role}`, text: meta });
 
-    showThinking() {
-      this.removeThinking();
-      const row = el("div", { class: "blynk-row assistant" });
-      const bubble = el("div", {
-        class: "blynk-bubble assistant",
-        text: "Thinking…",
-      });
-      row.appendChild(bubble);
-      this.ui.thread.appendChild(row);
-      this._thinkingEl = row;
-      this.scrollToBottom();
-    },
+      wrap.appendChild(bubble);
+      wrap.appendChild(m);
 
-    removeThinking() {
-      if (this._thinkingEl && this._thinkingEl.parentNode) {
-        this._thinkingEl.parentNode.removeChild(this._thinkingEl);
+      if (role === "user") {
+        row.appendChild(wrap);
+        row.appendChild(av);
+      } else {
+        row.appendChild(av);
+        row.appendChild(wrap);
       }
-      this._thinkingEl = null;
+
+      return row;
     },
 
-    setSending(isSending) {
-      this.ui.sendBtn.disabled = isSending;
-      this.ui.input.disabled = isSending;
+    appendMessage(role, text, sources) {
+      const meta = role === "user" ? "You • now" : "Blynky • now";
+      this.ui.stage.insertBefore(
+        this._msgRow({ role, text, meta, sources }),
+        this._typingRow || null
+      );
+      this.scrollToBottom();
     },
 
-    scrollToBottom() {
-      const t = this.ui.thread;
-      t.scrollTop = t.scrollHeight;
-    },
-
-    async handleSend() {
-      const text = (this.ui.input.value || "").trim();
+    async handleSend(forcedText) {
+      const text = (forcedText || this.ui.input.value || "").trim();
       if (!text) return;
 
-      this.appendUser(text);
+      this.appendMessage("user", text);
       this.ui.input.value = "";
-      this.ui.input.style.height = "auto";
 
       this.setSending(true);
-      this.showThinking();
+      this.setTyping(true);
 
       try {
         const payload = {
@@ -531,20 +905,18 @@
           clientId: this.config.clientId,
           mode: this.config.mode,
           role: this.config.role,
-          debug: this.config.debug, // enables backend debug output
+          debug: this.config.debug,
         };
 
         const headers = {
           "Content-Type": "application/json",
         };
 
-        // Auth headers for Supabase Edge Functions when verify_jwt is enabled
         if (this.config.anonKey) {
           headers.apikey = this.config.anonKey;
           headers.Authorization = `Bearer ${this.config.anonKey}`;
         }
 
-        // Optional admin role testing (backend still enforces)
         if (this.config.adminToken) {
           payload.adminToken = this.config.adminToken;
           headers["x-admin-token"] = this.config.adminToken;
@@ -563,29 +935,26 @@
 
         const data = await res.json();
 
-        // If backend says role filtering is disabled, show everything (demo mode)
         const bypassRoleFilter = Boolean(
           data && (data.disableRoleFilter || data.disable_role_filter)
         );
 
         const allSources = Array.isArray(data?.sources) ? data.sources : [];
-
-        // If bypassing, do NOT hide admin sources for user demo.
         const visibleSources = bypassRoleFilter
           ? allSources
           : filterSourcesByRole(allSources, this.config.role);
 
         const answer = (data?.answer || "No answer returned.").toString();
 
-        this.removeThinking();
-        this.appendAssistant(answer, visibleSources);
+        this.setTyping(false);
+        this.appendMessage("ai", answer, visibleSources);
       } catch (err) {
-        this.removeThinking();
-        this.appendAssistant("Sorry — something went wrong. Please try again.");
+        this.setTyping(false);
+        this.appendMessage("ai", "Sorry — something went wrong. Please try again.");
         log("Error", err);
       } finally {
         this.setSending(false);
-        this.ui.input.focus();
+        if (this.isOpen) this.ui.input.focus();
       }
     },
   };
