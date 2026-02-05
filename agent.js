@@ -21,6 +21,9 @@
     return;
   }
 
+  const DEFAULT_PROFILE_ICON =
+    "https://blynk-images.s3.us-west-2.amazonaws.com/ai-agent/profile-icons/smart-blynky.png";
+
   const config = {
     clientId: scriptEl.getAttribute("data-client-id") || "blynk-default",
     apiUrl: scriptEl.getAttribute("data-api-url"), // full supabase function URL
@@ -36,6 +39,9 @@
 
     // Optional: only set this on admin pages for testing
     adminToken: scriptEl.getAttribute("data-admin-token") || "",
+
+    // Tenant-driven profile icon (loaded at runtime; fallback used)
+    profileIcon: scriptEl.getAttribute("data-profile-icon") || DEFAULT_PROFILE_ICON,
   };
 
   if (!config.apiUrl || !/^https?:\/\//i.test(config.apiUrl)) {
@@ -122,7 +128,25 @@
         display: flex; align-items: center; justify-content: space-between;
         background: #fff;
       }
-      .blynk-title { font-size: 14px; font-weight: 600; }
+
+      /* ✅ Header left cluster (icon + title) */
+      .blynk-header-left {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+      }
+
+      .blynk-avatar {
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        flex: 0 0 28px;
+        object-fit: cover;
+        display: block;
+      }
+
+      .blynk-title { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
       .blynk-close {
         border: none; background: transparent; cursor: pointer;
@@ -247,6 +271,44 @@
     });
   }
 
+  function buildTenantSettingsUrlFromAskUrl(askUrl) {
+    // askUrl: https://.../functions/v1/ask -> https://.../functions/v1/update_tenant_settings
+    try {
+      const u = new URL(askUrl);
+      u.pathname = u.pathname.replace(/\/ask\/?$/, "/update_tenant_settings");
+      if (!/\/update_tenant_settings$/.test(u.pathname)) {
+        // fallback: replace the last segment with update_tenant_settings
+        u.pathname = u.pathname.replace(/\/[^/]+$/, "/update_tenant_settings");
+      }
+      return u.toString();
+    } catch {
+      return null;
+    }
+  }
+
+  async function fetchTenantSettings(tenantId) {
+    const base = buildTenantSettingsUrlFromAskUrl(config.apiUrl);
+    if (!base) return null;
+
+    const url = `${base}?tenantId=${encodeURIComponent(tenantId)}`;
+
+    const headers = {};
+    if (config.anonKey) {
+      headers.apikey = config.anonKey;
+      headers.Authorization = `Bearer ${config.anonKey}`;
+    }
+
+    const res = await fetch(url, { method: "GET", headers });
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      log("Tenant settings GET failed:", res.status, t);
+      return null;
+    }
+
+    const json = await res.json().catch(() => null);
+    return json;
+  }
+
   const Agent = {
     config,
     root: null,
@@ -254,10 +316,22 @@
     ui: {},
     _thinkingEl: null,
 
-    init() {
+    async init() {
       injectStylesOnce();
       createRoot();
       this.root = document.getElementById(ROOT_ID);
+
+      // ✅ Load tenant settings (profile icon) before mounting UI
+      try {
+        const settings = await fetchTenantSettings(this.config.clientId);
+        if (settings && typeof settings.profile_icon === "string" && settings.profile_icon.trim()) {
+          this.config.profileIcon = settings.profile_icon.trim();
+        }
+      } catch (e) {
+        // non-fatal
+        log("Tenant settings load error:", e);
+      }
+
       this.mountUI();
       log("Initialized", { config: this.config });
     },
@@ -292,10 +366,23 @@
       closeBtn.textContent = "×";
       closeBtn.addEventListener("click", () => this.close());
 
-      const header = el("div", { class: "blynk-header" }, [
+      // ✅ avatar + title (top-left)
+      const avatar = el("img", {
+        class: "blynk-avatar",
+        src: this.config.profileIcon || DEFAULT_PROFILE_ICON,
+        alt: "Profile",
+      });
+      // fallback if image fails to load
+      avatar.addEventListener("error", () => {
+        avatar.src = DEFAULT_PROFILE_ICON;
+      });
+
+      const headerLeft = el("div", { class: "blynk-header-left" }, [
+        avatar,
         el("div", { class: "blynk-title", text: this.config.title }),
-        closeBtn,
       ]);
+
+      const header = el("div", { class: "blynk-header" }, [headerLeft, closeBtn]);
 
       const thread = el("div", { class: "blynk-thread" });
 
@@ -334,7 +421,7 @@
       wrap.appendChild(launcher);
       this.root.appendChild(wrap);
 
-      this.ui = { wrap, launcher, panel, header, thread, input, sendBtn };
+      this.ui = { wrap, launcher, panel, header, headerLeft, avatar, thread, input, sendBtn };
 
       this.appendAssistant("Hi! How can I help today?");
     },
