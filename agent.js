@@ -346,7 +346,7 @@
 
 #${ROOT_ID} .blynk-subcopy{
   padding: 0 16px 10px;
-  color: rgba(249,21,38,.60);
+  color: rgba(80,77,97,.60);
   font-size:14px;
   line-height:1.45;
 }
@@ -407,7 +407,7 @@
   line-height:1.45;
   position:relative;
   overflow:hidden;
-  color: rgba(249,21,38,100);
+  color: rgba(80,77,97,100);
 }
 #${ROOT_ID} .blynk-bubble:before{
   content:"";
