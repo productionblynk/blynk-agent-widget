@@ -1,12 +1,13 @@
 /* =====================================================
    B-lynk Agent Widget — Phase 1 (Refreshed UI Skin)
    Vanilla JS | Auto-boot | UI Renderer + Supabase Ask
-   - Uses frosty "Blynky" UI
+   - Frosty "Blynky" UI
    - Scoped styles (no global :root/body/html selectors)
-   - Supports tenant avatar via tenants.profile_icon (default fallback)
-   - Supports tenant theme colors via tenants.theme_primary/theme_accent/theme_launcher
-     returned from update_tenant_settings GET:
-     { theme: { primary, accent, launcher } }
+   - Tenant avatar via tenants.profile_icon (fallback default)
+   - Tenant theme colors via update_tenant_settings GET:
+       { theme: { primary, accent, launcher } }
+   - NEW: KB Summary panel (shown before AI answer if returned)
+     Looks for: data.kb_summary || data.kbSummary || data.summary || data.kbSummaryText
 ===================================================== */
 
 (function () {
@@ -38,7 +39,7 @@
   // -------------------------
   const config = {
     clientId: scriptEl.getAttribute("data-client-id") || "blynk-default",
-    apiUrl: scriptEl.getAttribute("data-api-url"), // full supabase function URL (ask)
+    apiUrl: scriptEl.getAttribute("data-api-url"),
     mode: scriptEl.getAttribute("data-mode") || "blynk_kb",
     debug: scriptEl.hasAttribute("data-debug"),
 
@@ -54,17 +55,16 @@
     role: (scriptEl.getAttribute("data-role") || "user").toLowerCase(),
     adminToken: scriptEl.getAttribute("data-admin-token") || "",
 
-    // Optional: if you want to point directly to a tenant settings function
+    // Optional: point directly to settings function
     // e.g. https://PROJECT.supabase.co/functions/v1/update_tenant_settings
     settingsUrl: scriptEl.getAttribute("data-settings-url") || "",
 
     // Optional UI quick actions (pipe-separated labels)
-    // Example: data-quick-actions="Reset password|Track order|Contact support"
     quickActions:
       scriptEl.getAttribute("data-quick-actions") ||
       "Reset password|Track order|Contact support",
 
-    // Optional explicit accent overrides (legacy)
+    // Legacy explicit accent overrides (still supported)
     accentCoral: scriptEl.getAttribute("data-accent-coral") || "",
     accentMint: scriptEl.getAttribute("data-accent-mint") || "",
 
@@ -94,6 +94,44 @@
       return new URL(url, window.location.href).href;
     } catch {
       return null;
+    }
+  }
+
+  // -------------------------
+  // Color helpers (safe fallbacks)
+  // -------------------------
+  function hexToRgb(hex) {
+    const s = String(hex || "").trim();
+    const m = s.match(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/);
+    if (!m) return null;
+    let h = m[1];
+    if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+    const n = parseInt(h, 16);
+    const r = (n >> 16) & 255;
+    const g = (n >> 8) & 255;
+    const b = n & 255;
+    return { r, g, b, css: `${r}, ${g}, ${b}` };
+  }
+
+  function setThemeVars(el, theme) {
+    if (!el || !theme) return;
+
+    if (theme.primary) {
+      el.style.setProperty("--blynk-primary", theme.primary);
+      const rgb = hexToRgb(theme.primary);
+      if (rgb) el.style.setProperty("--blynk-primary-rgb", rgb.css);
+    }
+
+    if (theme.accent) {
+      el.style.setProperty("--blynk-accent", theme.accent);
+      const rgb = hexToRgb(theme.accent);
+      if (rgb) el.style.setProperty("--blynk-accent-rgb", rgb.css);
+    }
+
+    if (theme.launcher) {
+      el.style.setProperty("--blynk-launcher", theme.launcher);
+      const rgb = hexToRgb(theme.launcher);
+      if (rgb) el.style.setProperty("--blynk-launcher-rgb", rgb.css);
     }
   }
 
@@ -132,14 +170,11 @@
   // TENANT SETTINGS (avatar/theme)
   // -------------------------
   function apiBaseFromAskUrl(askUrl) {
-    // https://xxx.supabase.co/functions/v1/ask -> https://xxx.supabase.co/functions/v1
     try {
       const u = new URL(askUrl);
       const parts = u.pathname.split("/").filter(Boolean);
       // expects ["functions","v1","ask"]
-      if (parts.length >= 2) {
-        u.pathname = "/" + parts.slice(0, 2).join("/");
-      }
+      if (parts.length >= 2) u.pathname = "/" + parts.slice(0, 2).join("/");
       u.search = "";
       u.hash = "";
       return u.toString();
@@ -152,13 +187,11 @@
     const apiBase = apiBaseFromAskUrl(config.apiUrl);
     const candidates = [];
 
-    // Prefer explicit settings URL if provided
     if (config.settingsUrl) candidates.push(config.settingsUrl);
 
-    // Try common function names (safe fallback order)
     if (apiBase) {
       candidates.push(`${apiBase}/get_tenant_settings`);
-      candidates.push(`${apiBase}/update_tenant_settings`); // your GET handler already returns settings
+      candidates.push(`${apiBase}/update_tenant_settings`); // your GET handler returns settings
     }
 
     if (!candidates.length) return null;
@@ -177,12 +210,8 @@
         if (!res.ok) continue;
 
         const data = await res.json().catch(() => null);
-        if (data && (data.ok === true || data.tenantId || data.id)) {
-          return data;
-        }
-      } catch (_e) {
-        // ignore and keep trying
-      }
+        if (data && (data.ok === true || data.tenantId || data.id)) return data;
+      } catch (_e) {}
     }
 
     return null;
@@ -217,7 +246,7 @@
     const style = document.createElement("style");
     style.id = STYLE_ID;
 
-    // NOTE: Everything is scoped under #blynk-agent-root to avoid "gotchas"
+    // NOTE: Everything is scoped under #blynk-agent-root
     style.textContent = `
 #${ROOT_ID}{all:initial}
 #${ROOT_ID} *{box-sizing:border-box;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,"Helvetica Neue",sans-serif}
@@ -225,8 +254,16 @@
 #${ROOT_ID} .blynk-wrap{
   position:fixed; bottom:24px; right:24px; z-index:999999;
   display:flex; flex-direction:column; gap:10px; align-items:flex-end;
-  /* launcher var lives here too (since launcher is outside widget) */
+
+  /* theme defaults live here (launcher is outside widget) */
+  --blynk-primary: ${config.accentMint || "#6ecace"};
+  --blynk-accent: ${config.accentCoral || "#ed5b4e"};
   --blynk-launcher: ${config.accentMint || "#6ecace"};
+
+  /* rgb fallbacks */
+  --blynk-primary-rgb: 110, 202, 206;
+  --blynk-accent-rgb: 237, 91, 78;
+  --blynk-launcher-rgb: 110, 202, 206;
 }
 
 #${ROOT_ID} .blynk-launcher{
@@ -235,7 +272,7 @@
   box-shadow:0 12px 30px rgba(0,0,0,0.18);
   background: var(--blynk-launcher);
   color:#fff;
-  border: 1px solid color-mix(in srgb, var(--blynk-launcher) 55%, rgba(255,255,255,.55));
+  border: 1px solid rgba(var(--blynk-launcher-rgb), .35);
 }
 
 #${ROOT_ID} .blynk-panel{
@@ -247,15 +284,14 @@
 }
 #${ROOT_ID} .blynk-panel.open{display:block}
 
-/* ---- Scoped theme vars (no global :root) ---- */
+/* ---- Widget vars (scoped) ---- */
 #${ROOT_ID} .blynk-widget{
-  --blynk-primary: ${config.accentMint || "#6ecace"};
-  --blynk-accent: ${config.accentCoral || "#ed5b4e"};
-  --blynk-launcher: ${config.accentMint || "#6ecace"};
+  /* inherit theme from wrap unless overridden */
+  --blynk-primary: var(--blynk-primary);
+  --blynk-accent: var(--blynk-accent);
 
-  /* backward compatibility aliases */
-  --accent-mint: var(--blynk-primary);
-  --accent-coral: var(--blynk-accent);
+  --blynk-primary-rgb: var(--blynk-primary-rgb);
+  --blynk-accent-rgb: var(--blynk-accent-rgb);
 
   --ink:#504d61;
   --shadow: rgba(80, 77, 97, 0.08);
@@ -279,9 +315,9 @@
   inset:-40px;
   z-index:0;
   background:
-    radial-gradient(220px 220px at 18% 18%, color-mix(in srgb, var(--blynk-primary) 55%, transparent), transparent 60%),
-    radial-gradient(240px 240px at 82% 28%, color-mix(in srgb, var(--blynk-accent) 45%, transparent), transparent 62%),
-    radial-gradient(260px 260px at 55% 85%, color-mix(in srgb, var(--blynk-primary) 35%, transparent), transparent 62%),
+    radial-gradient(220px 220px at 18% 18%, rgba(var(--blynk-primary-rgb), .55), transparent 60%),
+    radial-gradient(240px 240px at 82% 28%, rgba(var(--blynk-accent-rgb), .45), transparent 62%),
+    radial-gradient(260px 260px at 55% 85%, rgba(var(--blynk-primary-rgb), .35), transparent 62%),
     linear-gradient(180deg, rgba(255,255,255,.55), rgba(255,255,255,.35));
   filter: blur(22px) saturate(1.2);
   opacity:.9;
@@ -328,8 +364,8 @@
   width:46px; height:46px; border-radius:999px;
   border:1px solid rgba(80,77,97,.12);
   background:
-    radial-gradient(circle at 30% 30%, color-mix(in srgb, var(--blynk-accent) 22%, transparent), transparent 55%),
-    radial-gradient(circle at 70% 70%, color-mix(in srgb, var(--blynk-primary) 18%, transparent), transparent 60%),
+    radial-gradient(circle at 30% 30%, rgba(var(--blynk-accent-rgb), .22), transparent 55%),
+    radial-gradient(circle at 70% 70%, rgba(var(--blynk-primary-rgb), .18), transparent 60%),
     linear-gradient(180deg, rgba(255,255,255,.78), rgba(255,255,255,.55));
   box-shadow: 0 18px 55px var(--shadow);
   display:grid; place-items:center;
@@ -341,6 +377,7 @@
 #${ROOT_ID} .blynk-brandText{display:flex; flex-direction:column; gap:2px; min-width:0}
 #${ROOT_ID} .blynk-kicker{font-size:13px; font-weight:650; color: rgba(80,77,97,.78); line-height:1.1}
 #${ROOT_ID} .blynk-title{font-size:22px; font-weight:800; line-height:1.05; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+
 #${ROOT_ID} .blynk-close{
   width:36px; height:36px; border-radius:14px;
   border:1px solid rgba(80,77,97,.12);
@@ -351,13 +388,10 @@
 }
 #${ROOT_ID} .blynk-close:hover{
   transform: translateY(-1px);
-  border-color: color-mix(in srgb, var(--blynk-accent) 28%, rgba(80,77,97,.12));
+  border-color: rgba(var(--blynk-accent-rgb), .28);
   box-shadow: 0 26px 90px var(--shadow);
 }
-#${ROOT_ID} .blynk-x{
-  font-size:18px; line-height:1;
-  color: color-mix(in srgb, var(--blynk-accent) 85%, transparent);
-}
+#${ROOT_ID} .blynk-x{font-size:18px; line-height:1; color: rgba(var(--blynk-accent-rgb), .85)}
 
 #${ROOT_ID} .blynk-subcopy{
   padding: 0 16px 10px;
@@ -375,10 +409,7 @@
   transition: transform 220ms var(--ease), border-color 220ms var(--ease);
   user-select:none;
 }
-#${ROOT_ID} .blynk-chip:hover{
-  transform: translateY(-1px);
-  border-color: color-mix(in srgb, var(--blynk-primary) 28%, rgba(80,77,97,.10));
-}
+#${ROOT_ID} .blynk-chip:hover{transform: translateY(-1px); border-color: rgba(var(--blynk-primary-rgb), .28)}
 
 /* ---- Messages ---- */
 #${ROOT_ID} .blynk-stage{
@@ -396,20 +427,21 @@
 #${ROOT_ID} .blynk-row{display:flex; gap:10px; align-items:flex-end; margin:10px 0}
 #${ROOT_ID} .blynk-row.ai{justify-content:flex-start}
 #${ROOT_ID} .blynk-row.user{justify-content:flex-end}
+
 #${ROOT_ID} .blynk-avatar{
   width:30px; height:30px; border-radius:999px; overflow:hidden;
   border:1px solid rgba(80,77,97,.12);
   box-shadow: 0 18px 55px var(--shadow);
   background:
-    radial-gradient(circle at 30% 30%, color-mix(in srgb, var(--blynk-primary) 40%, transparent), transparent 55%),
-    radial-gradient(circle at 70% 70%, color-mix(in srgb, var(--blynk-accent) 26%, transparent), transparent 60%),
+    radial-gradient(circle at 30% 30%, rgba(var(--blynk-primary-rgb), .40), transparent 55%),
+    radial-gradient(circle at 70% 70%, rgba(var(--blynk-accent-rgb), .26), transparent 60%),
     linear-gradient(180deg, rgba(255,255,255,.78), rgba(255,255,255,.55));
   flex:0 0 auto;
 }
 #${ROOT_ID} .blynk-avatar.user{
   background:
-    radial-gradient(circle at 30% 30%, color-mix(in srgb, var(--blynk-accent) 30%, transparent), transparent 55%),
-    radial-gradient(circle at 70% 70%, color-mix(in srgb, var(--blynk-primary) 18%, transparent), transparent 60%),
+    radial-gradient(circle at 30% 30%, rgba(var(--blynk-accent-rgb), .30), transparent 55%),
+    radial-gradient(circle at 70% 70%, rgba(var(--blynk-primary-rgb), .18), transparent 60%),
     linear-gradient(180deg, rgba(255,255,255,.78), rgba(255,255,255,.55));
 }
 #${ROOT_ID} .blynk-avatar img{width:100%; height:100%; object-fit:cover; display:block}
@@ -425,7 +457,7 @@
   line-height:1.45;
   position:relative;
   overflow:hidden;
-  color: rgba(0,0,0,100);
+  color: rgba(0,0,0,1);
 }
 #${ROOT_ID} .blynk-bubble:before{
   content:"";
@@ -436,10 +468,12 @@
   transform: rotate(10deg);
   pointer-events:none;
 }
+
 #${ROOT_ID} .blynk-bubble.user{
   background: rgba(170, 170, 178, 0.75);
   border-color: rgba(80, 77, 97, 0.4);
 }
+
 #${ROOT_ID} .blynk-bubble.ai:after{
   content:"";
   position:absolute;
@@ -455,9 +489,9 @@
   position:absolute;
   right:-6px; bottom:10px;
   width:14px; height:14px;
-  background: color-mix(in srgb, var(--blynk-primary) 16%, rgba(255,255,255,.62));
-  border-right: 1px solid color-mix(in srgb, var(--blynk-primary) 22%, transparent);
-  border-top: 1px solid color-mix(in srgb, var(--blynk-primary) 10%, transparent);
+  background: rgba(var(--blynk-primary-rgb), .16);
+  border-right: 1px solid rgba(var(--blynk-primary-rgb), .22);
+  border-top: 1px solid rgba(var(--blynk-primary-rgb), .10);
   transform: rotate(45deg);
 }
 
@@ -495,6 +529,24 @@
 @keyframes blynkBounce{
   0%, 80%, 100%{transform: translateY(0); opacity:.45}
   40%{transform: translateY(-4px); opacity:.85}
+}
+
+/* KB Summary (green box) */
+#${ROOT_ID} .blynk-kbTitle{
+  font-size:12px;
+  font-weight:800;
+  letter-spacing:.02em;
+  color: rgba(var(--blynk-primary-rgb), .95);
+  margin: 0 0 6px 0;
+  text-transform: uppercase;
+}
+#${ROOT_ID} .blynk-bubble.kb{
+  background: rgba(var(--blynk-primary-rgb), .14);
+  border-color: rgba(var(--blynk-primary-rgb), .30);
+}
+#${ROOT_ID} .blynk-bubble.kb:after{display:none}
+#${ROOT_ID} .blynk-kbText{
+  white-space:pre-wrap;
 }
 
 /* Sources (links) */
@@ -540,20 +592,8 @@
   position:relative;
   overflow:hidden;
 }
-#${ROOT_ID} .blynk-inputWrap:before{
-  content:"";
-  position:absolute;
-  left:-20%; right:-20%; bottom:-60%;
-  height:130%;
-  background: radial-gradient(closest-side, rgba(255,255,255,.80), transparent 60%);
-  opacity:0;
-  transform: translateY(10px);
-  transition: opacity 220ms var(--ease), transform 220ms var(--ease);
-  pointer-events:none;
-}
-#${ROOT_ID} .blynk-inputWrap:focus-within:before{
-  opacity:.8;
-  transform: translateY(0);
+#${ROOT_ID} .blynk-inputWrap:focus-within{
+  border-color: rgba(var(--blynk-primary-rgb), .32);
 }
 #${ROOT_ID} .blynk-input{
   width:100%;
@@ -570,12 +610,8 @@
   min-width:78px;
   padding:0 14px;
   border-radius:14px;
-  border:1px solid rgba(80,77,97,.12);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--blynk-accent) 22%, transparent),
-    color-mix(in srgb, var(--blynk-accent) 14%, transparent)
-  );
+  border:1px solid rgba(var(--blynk-accent-rgb), .28);
+  background: linear-gradient(180deg, rgba(var(--blynk-accent-rgb), .22), rgba(var(--blynk-accent-rgb), .14));
   box-shadow: 0 18px 55px var(--shadow);
   cursor:pointer;
   font-weight:750;
@@ -606,8 +642,6 @@
     tenant: {
       profile_icon: config.profileIcon || DEFAULT_PROFILE_ICON,
       title: config.title,
-
-      // theme from tenant settings (optional)
       theme_primary: "",
       theme_accent: "",
       theme_launcher: "",
@@ -619,11 +653,10 @@
       injectStylesOnce();
       this.root = createRoot();
 
-      // Try to load tenant settings (avatar/theme) without breaking if missing
+      // Try to load tenant settings (avatar/theme)
       try {
         const t = await fetchTenantSettings();
         if (t) {
-          // avatar column (profile_icon)
           const icon =
             t.profile_icon ||
             (t.tenant && t.tenant.profile_icon) ||
@@ -632,7 +665,6 @@
 
           this.tenant.profile_icon = (icon || "").toString().trim() || DEFAULT_PROFILE_ICON;
 
-          // theme (new fields)
           const theme = t.theme || (t.tenant && t.tenant.theme) || {};
           const primary = t.theme_primary || theme.primary || "";
           const accent = t.theme_accent || theme.accent || "";
@@ -642,7 +674,6 @@
           if (accent) this.tenant.theme_accent = String(accent).trim();
           if (launcher) this.tenant.theme_launcher = String(launcher).trim();
 
-          // Optional tenant display name/title
           const tenantTitle = t.title || t.widget_title || t.tenant_title || "";
           if (tenantTitle) this.tenant.title = String(tenantTitle);
 
@@ -657,41 +688,40 @@
     },
 
     mountUI() {
-      // wrapper
       const wrap = el("div", { class: "blynk-wrap" });
 
-      // Apply launcher theme var at wrap level (launcher uses it)
-      if (this.tenant.theme_launcher) {
-        wrap.style.setProperty("--blynk-launcher", this.tenant.theme_launcher);
-      }
+      // Apply theme vars at wrap level (affects launcher + widget via inheritance)
+      setThemeVars(wrap, {
+        primary: this.tenant.theme_primary || (config.accentMint || ""),
+        accent: this.tenant.theme_accent || (config.accentCoral || ""),
+        launcher: this.tenant.theme_launcher || (config.accentMint || ""),
+      });
 
-      // panel
       const panel = el("div", {
         class: "blynk-panel",
         role: "dialog",
         "aria-label": "Support chat",
       });
 
-      // widget (inside panel)
       const widget = el("div", {
         class: "blynk-widget",
         role: "application",
         "aria-label": "Ask Blynky chat widget",
       });
 
-      // Apply theme vars only if present (keeps defaults otherwise)
-      if (this.tenant.theme_primary) widget.style.setProperty("--blynk-primary", this.tenant.theme_primary);
-      if (this.tenant.theme_accent) widget.style.setProperty("--blynk-accent", this.tenant.theme_accent);
-      if (this.tenant.theme_launcher) widget.style.setProperty("--blynk-launcher", this.tenant.theme_launcher);
+      // If tenant has values, override on widget too (explicit)
+      setThemeVars(widget, {
+        primary: this.tenant.theme_primary || "",
+        accent: this.tenant.theme_accent || "",
+        launcher: this.tenant.theme_launcher || "",
+      });
 
-      // header block
       const head = el("div", { class: "blynk-head" });
 
       const headerRow = el("div", { class: "blynk-header" });
 
       const brand = el("div", { class: "blynk-brand" });
 
-      // logo (image)
       const logo = el("div", { class: "blynk-logo", "aria-hidden": "true" });
       const logoImg = el("img", {
         class: "blynk-logoImg",
@@ -743,11 +773,9 @@
       head.appendChild(subcopy);
       head.appendChild(chips);
 
-      // stage
       const stage = el("div", { class: "blynk-stage" });
       stage.id = "blynkStage";
 
-      // initial hello
       stage.appendChild(this._msgRow({ role: "ai", text: "Hi! How can I help today?", meta: "Blynky • just now" }));
 
       // typing row
@@ -793,15 +821,12 @@
       composer.appendChild(inputWrap);
       composer.appendChild(sendBtn);
 
-      // assemble widget
       widget.appendChild(head);
       widget.appendChild(stage);
       widget.appendChild(composer);
 
-      // panel content
       panel.appendChild(widget);
 
-      // launcher button
       const launcher = el("button", {
         class: "blynk-launcher",
         type: "button",
@@ -821,7 +846,6 @@
 
       this.ui = { wrap, panel, widget, head, stage, composer, input, sendBtn, launcher };
 
-      // open/closed default: closed
       this.close();
     },
 
@@ -857,7 +881,7 @@
       this.ui.input.disabled = isSending;
     },
 
-    _msgRow({ role, text, meta, sources }) {
+    _msgRow({ role, text, meta, sources, kind }) {
       const row = el("div", { class: `blynk-row ${role}` });
 
       const av = el("div", { class: `blynk-avatar ${role}`, "aria-hidden": "true" });
@@ -867,8 +891,17 @@
 
       const wrap = el("div");
 
-      const bubble = el("div", { class: `blynk-bubble ${role} blynk-enter` });
-      bubble.textContent = text;
+      const bubble = el("div", { class: `blynk-bubble ${role} ${kind || ""} blynk-enter` });
+
+      if (kind === "kb") {
+        const title = el("div", { class: "blynk-kbTitle", text: "KB Summary" });
+        const body = el("div", { class: "blynk-kbText" });
+        body.textContent = text;
+        bubble.appendChild(title);
+        bubble.appendChild(body);
+      } else {
+        bubble.textContent = text;
+      }
 
       if (Array.isArray(sources) && sources.length) {
         const sourcesEl = el("div", { class: "blynk-sources" });
@@ -908,9 +941,18 @@
       return row;
     },
 
-    appendMessage(role, text, sources) {
-      const meta = role === "user" ? "You • now" : "Blynky • now";
-      this.ui.stage.insertBefore(this._msgRow({ role, text, meta, sources }), this._typingRow || null);
+    appendMessage(role, text, sources, kind) {
+      const meta =
+        kind === "kb"
+          ? "KB Summary • now"
+          : role === "user"
+          ? "You • now"
+          : "Blynky • now";
+
+      this.ui.stage.insertBefore(
+        this._msgRow({ role, text, meta, sources, kind }),
+        this._typingRow || null
+      );
       this.scrollToBottom();
     },
 
@@ -933,9 +975,7 @@
           debug: this.config.debug,
         };
 
-        const headers = {
-          "Content-Type": "application/json",
-        };
+        const headers = { "Content-Type": "application/json" };
 
         if (this.config.anonKey) {
           headers.apikey = this.config.anonKey;
@@ -961,13 +1001,21 @@
         const data = await res.json();
 
         const bypassRoleFilter = Boolean(data && (data.disableRoleFilter || data.disable_role_filter));
-
         const allSources = Array.isArray(data?.sources) ? data.sources : [];
         const visibleSources = bypassRoleFilter ? allSources : filterSourcesByRole(allSources, this.config.role);
 
-        const answer = (data?.answer || "No answer returned.").toString();
+        // --- NEW: KB summary panel (before AI answer) ---
+        const kbSummary =
+          (data && (data.kb_summary || data.kbSummary || data.summary || data.kbSummaryText)) || "";
 
+        // Hide typing before we show summary/answer
         this.setTyping(false);
+
+        if (kbSummary && String(kbSummary).trim()) {
+          this.appendMessage("ai", String(kbSummary).trim(), null, "kb");
+        }
+
+        const answer = (data?.answer || "No answer returned.").toString();
         this.appendMessage("ai", answer, visibleSources);
       } catch (err) {
         this.setTyping(false);
