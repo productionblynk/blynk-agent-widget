@@ -419,8 +419,9 @@
   pointer-events:none;
 }
 #${ROOT_ID} .blynk-bubble.user{
-  background: linear-gradient(180deg, rgba(110,202,206,.30), rgba(110,202,206,.14));
-  border-color: rgba(110,202,206,.28);
+  
+   background: rgba(170, 170, 178, 0.75);
+   border-color: rgba(80, 77, 97, 0.4);
 }
 #${ROOT_ID} .blynk-bubble.ai:after{
   content:"";
