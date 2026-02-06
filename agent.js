@@ -324,7 +324,7 @@
   overflow:hidden;
 }
 #${ROOT_ID} .blynk-logoImg{
-  width:100%; height:100%; object-fit:cover; border-radius:999px; display:block;
+  width:80%; height:100%; object-fit:contain; border-radius:999px; display:block;
 }
 #${ROOT_ID} .blynk-brandText{display:flex; flex-direction:column; gap:2px; min-width:0}
 #${ROOT_ID} .blynk-kicker{font-size:13px; font-weight:650; color: rgba(80,77,97,.78); line-height:1.1}
