@@ -4,7 +4,9 @@
    - Uses frosty "Blynky" UI
    - Scoped styles (no global :root/body/html selectors)
    - Supports tenant avatar via tenants.profile_icon (default fallback)
-   - Supports optional tenant accent colors (if returned)
+   - Supports tenant theme colors via tenants.theme_primary/theme_accent/theme_launcher
+     returned from update_tenant_settings GET:
+     { theme: { primary, accent, launcher } }
 ===================================================== */
 
 (function () {
@@ -53,7 +55,7 @@
     adminToken: scriptEl.getAttribute("data-admin-token") || "",
 
     // Optional: if you want to point directly to a tenant settings function
-    // e.g. https://PROJECT.supabase.co/functions/v1/get_tenant_settings
+    // e.g. https://PROJECT.supabase.co/functions/v1/update_tenant_settings
     settingsUrl: scriptEl.getAttribute("data-settings-url") || "",
 
     // Optional UI quick actions (pipe-separated labels)
@@ -62,7 +64,7 @@
       scriptEl.getAttribute("data-quick-actions") ||
       "Reset password|Track order|Contact support",
 
-    // Optional explicit accent overrides
+    // Optional explicit accent overrides (legacy)
     accentCoral: scriptEl.getAttribute("data-accent-coral") || "",
     accentMint: scriptEl.getAttribute("data-accent-mint") || "",
 
@@ -223,13 +225,17 @@
 #${ROOT_ID} .blynk-wrap{
   position:fixed; bottom:24px; right:24px; z-index:999999;
   display:flex; flex-direction:column; gap:10px; align-items:flex-end;
+  /* launcher var lives here too (since launcher is outside widget) */
+  --blynk-launcher: ${config.accentMint || "#6ecace"};
 }
 
 #${ROOT_ID} .blynk-launcher{
   width:56px; height:56px; border-radius:999px; border:none; cursor:pointer;
   display:flex; align-items:center; justify-content:center;
   box-shadow:0 12px 30px rgba(0,0,0,0.18);
-  background:#fff; color:#000;
+  background: var(--blynk-launcher);
+  color:#fff;
+  border: 1px solid color-mix(in srgb, var(--blynk-launcher) 55%, rgba(255,255,255,.55));
 }
 
 #${ROOT_ID} .blynk-panel{
@@ -243,8 +249,14 @@
 
 /* ---- Scoped theme vars (no global :root) ---- */
 #${ROOT_ID} .blynk-widget{
-  --accent-coral: ${config.accentCoral || "#ed5b4e"};
-  --accent-mint: ${config.accentMint || "#6ecace"};
+  --blynk-primary: ${config.accentMint || "#6ecace"};
+  --blynk-accent: ${config.accentCoral || "#ed5b4e"};
+  --blynk-launcher: ${config.accentMint || "#6ecace"};
+
+  /* backward compatibility aliases */
+  --accent-mint: var(--blynk-primary);
+  --accent-coral: var(--blynk-accent);
+
   --ink:#504d61;
   --shadow: rgba(80, 77, 97, 0.08);
   --radius-xl: 24px;
@@ -267,9 +279,9 @@
   inset:-40px;
   z-index:0;
   background:
-    radial-gradient(220px 220px at 18% 18%, rgba(110,202,206,.55), transparent 60%),
-    radial-gradient(240px 240px at 82% 28%, rgba(237,91,78,.45), transparent 62%),
-    radial-gradient(260px 260px at 55% 85%, rgba(110,202,206,.35), transparent 62%),
+    radial-gradient(220px 220px at 18% 18%, color-mix(in srgb, var(--blynk-primary) 55%, transparent), transparent 60%),
+    radial-gradient(240px 240px at 82% 28%, color-mix(in srgb, var(--blynk-accent) 45%, transparent), transparent 62%),
+    radial-gradient(260px 260px at 55% 85%, color-mix(in srgb, var(--blynk-primary) 35%, transparent), transparent 62%),
     linear-gradient(180deg, rgba(255,255,255,.55), rgba(255,255,255,.35));
   filter: blur(22px) saturate(1.2);
   opacity:.9;
@@ -316,8 +328,8 @@
   width:46px; height:46px; border-radius:999px;
   border:1px solid rgba(80,77,97,.12);
   background:
-    radial-gradient(circle at 30% 30%, rgba(237,91,78,.22), transparent 55%),
-    radial-gradient(circle at 70% 70%, rgba(110,202,206,.18), transparent 60%),
+    radial-gradient(circle at 30% 30%, color-mix(in srgb, var(--blynk-accent) 22%, transparent), transparent 55%),
+    radial-gradient(circle at 70% 70%, color-mix(in srgb, var(--blynk-primary) 18%, transparent), transparent 60%),
     linear-gradient(180deg, rgba(255,255,255,.78), rgba(255,255,255,.55));
   box-shadow: 0 18px 55px var(--shadow);
   display:grid; place-items:center;
@@ -339,10 +351,13 @@
 }
 #${ROOT_ID} .blynk-close:hover{
   transform: translateY(-1px);
-  border-color: rgba(237,91,78,.28);
+  border-color: color-mix(in srgb, var(--blynk-accent) 28%, rgba(80,77,97,.12));
   box-shadow: 0 26px 90px var(--shadow);
 }
-#${ROOT_ID} .blynk-x{font-size:18px; line-height:1; color: rgba(237,91,78,.85)}
+#${ROOT_ID} .blynk-x{
+  font-size:18px; line-height:1;
+  color: color-mix(in srgb, var(--blynk-accent) 85%, transparent);
+}
 
 #${ROOT_ID} .blynk-subcopy{
   padding: 0 16px 10px;
@@ -360,7 +375,10 @@
   transition: transform 220ms var(--ease), border-color 220ms var(--ease);
   user-select:none;
 }
-#${ROOT_ID} .blynk-chip:hover{transform: translateY(-1px); border-color: rgba(110,202,206,.28)}
+#${ROOT_ID} .blynk-chip:hover{
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--blynk-primary) 28%, rgba(80,77,97,.10));
+}
 
 /* ---- Messages ---- */
 #${ROOT_ID} .blynk-stage{
@@ -383,15 +401,15 @@
   border:1px solid rgba(80,77,97,.12);
   box-shadow: 0 18px 55px var(--shadow);
   background:
-    radial-gradient(circle at 30% 30%, rgba(110,202,206,.40), transparent 55%),
-    radial-gradient(circle at 70% 70%, rgba(237,91,78,.26), transparent 60%),
+    radial-gradient(circle at 30% 30%, color-mix(in srgb, var(--blynk-primary) 40%, transparent), transparent 55%),
+    radial-gradient(circle at 70% 70%, color-mix(in srgb, var(--blynk-accent) 26%, transparent), transparent 60%),
     linear-gradient(180deg, rgba(255,255,255,.78), rgba(255,255,255,.55));
   flex:0 0 auto;
 }
 #${ROOT_ID} .blynk-avatar.user{
   background:
-    radial-gradient(circle at 30% 30%, rgba(237,91,78,.30), transparent 55%),
-    radial-gradient(circle at 70% 70%, rgba(110,202,206,.18), transparent 60%),
+    radial-gradient(circle at 30% 30%, color-mix(in srgb, var(--blynk-accent) 30%, transparent), transparent 55%),
+    radial-gradient(circle at 70% 70%, color-mix(in srgb, var(--blynk-primary) 18%, transparent), transparent 60%),
     linear-gradient(180deg, rgba(255,255,255,.78), rgba(255,255,255,.55));
 }
 #${ROOT_ID} .blynk-avatar img{width:100%; height:100%; object-fit:cover; display:block}
@@ -419,9 +437,8 @@
   pointer-events:none;
 }
 #${ROOT_ID} .blynk-bubble.user{
-  
-   background: rgba(170, 170, 178, 0.75);
-   border-color: rgba(80, 77, 97, 0.4);
+  background: rgba(170, 170, 178, 0.75);
+  border-color: rgba(80, 77, 97, 0.4);
 }
 #${ROOT_ID} .blynk-bubble.ai:after{
   content:"";
@@ -438,9 +455,9 @@
   position:absolute;
   right:-6px; bottom:10px;
   width:14px; height:14px;
-  background: rgba(110,202,206,.16);
-  border-right: 1px solid rgba(110,202,206,.22);
-  border-top: 1px solid rgba(110,202,206,.10);
+  background: color-mix(in srgb, var(--blynk-primary) 16%, rgba(255,255,255,.62));
+  border-right: 1px solid color-mix(in srgb, var(--blynk-primary) 22%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--blynk-primary) 10%, transparent);
   transform: rotate(45deg);
 }
 
@@ -554,7 +571,11 @@
   padding:0 14px;
   border-radius:14px;
   border:1px solid rgba(80,77,97,.12);
-  background: linear-gradient(180deg, rgba(237,91,78,.22), rgba(237,91,78,.14));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--blynk-accent) 22%, transparent),
+    color-mix(in srgb, var(--blynk-accent) 14%, transparent)
+  );
   box-shadow: 0 18px 55px var(--shadow);
   cursor:pointer;
   font-weight:750;
@@ -581,12 +602,17 @@
     root: null,
     isOpen: false,
     ui: {},
+
     tenant: {
       profile_icon: config.profileIcon || DEFAULT_PROFILE_ICON,
-      accent_coral: config.accentCoral || "",
-      accent_mint: config.accentMint || "",
       title: config.title,
+
+      // theme from tenant settings (optional)
+      theme_primary: "",
+      theme_accent: "",
+      theme_launcher: "",
     },
+
     _typingRow: null,
 
     async init() {
@@ -597,7 +623,7 @@
       try {
         const t = await fetchTenantSettings();
         if (t) {
-          // avatar column (you added profile_icon)
+          // avatar column (profile_icon)
           const icon =
             t.profile_icon ||
             (t.tenant && t.tenant.profile_icon) ||
@@ -606,20 +632,15 @@
 
           this.tenant.profile_icon = (icon || "").toString().trim() || DEFAULT_PROFILE_ICON;
 
-          // Optional theme support (if you add columns later)
-          const coral =
-            t.accent_coral ||
-            t.accentCoral ||
-            (t.theme && t.theme.accent_coral) ||
-            "";
-          const mint =
-            t.accent_mint ||
-            t.accentMint ||
-            (t.theme && t.theme.accent_mint) ||
-            "";
+          // theme (new fields)
+          const theme = t.theme || (t.tenant && t.tenant.theme) || {};
+          const primary = t.theme_primary || theme.primary || "";
+          const accent = t.theme_accent || theme.accent || "";
+          const launcher = t.theme_launcher || theme.launcher || "";
 
-          if (coral) this.tenant.accent_coral = String(coral);
-          if (mint) this.tenant.accent_mint = String(mint);
+          if (primary) this.tenant.theme_primary = String(primary).trim();
+          if (accent) this.tenant.theme_accent = String(accent).trim();
+          if (launcher) this.tenant.theme_launcher = String(launcher).trim();
 
           // Optional tenant display name/title
           const tenantTitle = t.title || t.widget_title || t.tenant_title || "";
@@ -639,6 +660,11 @@
       // wrapper
       const wrap = el("div", { class: "blynk-wrap" });
 
+      // Apply launcher theme var at wrap level (launcher uses it)
+      if (this.tenant.theme_launcher) {
+        wrap.style.setProperty("--blynk-launcher", this.tenant.theme_launcher);
+      }
+
       // panel
       const panel = el("div", {
         class: "blynk-panel",
@@ -653,9 +679,10 @@
         "aria-label": "Ask Blynky chat widget",
       });
 
-      // apply tenant accents if present
-      if (this.tenant.accent_coral) widget.style.setProperty("--accent-coral", this.tenant.accent_coral);
-      if (this.tenant.accent_mint) widget.style.setProperty("--accent-mint", this.tenant.accent_mint);
+      // Apply theme vars only if present (keeps defaults otherwise)
+      if (this.tenant.theme_primary) widget.style.setProperty("--blynk-primary", this.tenant.theme_primary);
+      if (this.tenant.theme_accent) widget.style.setProperty("--blynk-accent", this.tenant.theme_accent);
+      if (this.tenant.theme_launcher) widget.style.setProperty("--blynk-launcher", this.tenant.theme_launcher);
 
       // header block
       const head = el("div", { class: "blynk-head" });
@@ -664,7 +691,7 @@
 
       const brand = el("div", { class: "blynk-brand" });
 
-      // logo (image if available, otherwise fallback svg)
+      // logo (image)
       const logo = el("div", { class: "blynk-logo", "aria-hidden": "true" });
       const logoImg = el("img", {
         class: "blynk-logoImg",
@@ -718,7 +745,7 @@
 
       // stage
       const stage = el("div", { class: "blynk-stage" });
-      stage.id = "blynkStage"; // scoped id but not relied upon
+      stage.id = "blynkStage";
 
       // initial hello
       stage.appendChild(this._msgRow({ role: "ai", text: "Hi! How can I help today?", meta: "Blynky • just now" }));
@@ -883,10 +910,7 @@
 
     appendMessage(role, text, sources) {
       const meta = role === "user" ? "You • now" : "Blynky • now";
-      this.ui.stage.insertBefore(
-        this._msgRow({ role, text, meta, sources }),
-        this._typingRow || null
-      );
+      this.ui.stage.insertBefore(this._msgRow({ role, text, meta, sources }), this._typingRow || null);
       this.scrollToBottom();
     },
 
@@ -936,14 +960,10 @@
 
         const data = await res.json();
 
-        const bypassRoleFilter = Boolean(
-          data && (data.disableRoleFilter || data.disable_role_filter)
-        );
+        const bypassRoleFilter = Boolean(data && (data.disableRoleFilter || data.disable_role_filter));
 
         const allSources = Array.isArray(data?.sources) ? data.sources : [];
-        const visibleSources = bypassRoleFilter
-          ? allSources
-          : filterSourcesByRole(allSources, this.config.role);
+        const visibleSources = bypassRoleFilter ? allSources : filterSourcesByRole(allSources, this.config.role);
 
         const answer = (data?.answer || "No answer returned.").toString();
 
