@@ -6,8 +6,11 @@
    - Tenant avatar via tenants.profile_icon (fallback default)
    - Tenant theme colors via update_tenant_settings GET:
        { theme: { primary, accent, launcher } }
-   - NEW: KB Summary panel (shown before AI answer if returned)
-     Looks for: data.kb_summary || data.kbSummary || data.summary || data.kbSummaryText
+   - NEW: Primary Sources + Helpful Assets grouping
+     Looks for:
+       data.primary_sources (preferred)
+       data.helpful_assets (optional)
+       data.sources (legacy fallback)
 ===================================================== */
 
 (function () {
@@ -135,9 +138,14 @@
     }
   }
 
-  // ✅ Source icons for links
+  // ✅ Source icons
   function sourceIcon(source) {
     if (source && source.type === "article") return "📘";
+
+    const provider = ((source && source.provider) || "").toString().toLowerCase();
+    if (provider.includes("google")) return "🟦";
+    if (provider.includes("dropbox")) return "🟪";
+    if (provider.includes("webflow")) return "🧩";
 
     const name = ((source && source.file_name) || (source && source.title) || "")
       .toString()
@@ -147,12 +155,12 @@
     if (name.endsWith(".gif")) return "🎞️";
     if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg")) return "🖼️";
     if (name.endsWith(".doc") || name.endsWith(".docx")) return "📝";
-    if (name.endsWith(".xls") || name.endsWith(".xlsx")) return "📊";
+    if (name.endsWith(".xls") || name.endsWith(".xlsx") || name.endsWith(".csv")) return "📊";
 
     return "📎";
   }
 
-  // UI-only source filtering (used only when backend is enforcing RBAC)
+  // UI-only role filtering (used only when backend is enforcing RBAC)
   function filterSourcesByRole(sources, role) {
     if (!Array.isArray(sources)) return [];
     if (role === "admin") return sources;
@@ -164,6 +172,97 @@
         .trim();
       return ar === "user";
     });
+  }
+
+  // -------------------------
+  // Source grouping helpers
+  // -------------------------
+  function normalizeSource(s) {
+    if (!s) return null;
+    const type = (s.type || "").toString().toLowerCase();
+    const provider = s.provider ? String(s.provider).toLowerCase() : null;
+
+    return {
+      type: type === "article" ? "article" : "file",
+      provider,
+      title: (s.title || s.file_name || "Source").toString(),
+      url: (s.url || "").toString(),
+      slug: s.slug ? String(s.slug) : null,
+      audience_role: (s.audience_role || s.audienceRole || "user").toString().toLowerCase(),
+      file_name: (s.file_name || "").toString(),
+      similarity: typeof s.similarity === "number" ? s.similarity : null,
+      mime_type: s.mime_type ? String(s.mime_type).toLowerCase() : null,
+    };
+  }
+
+  function isGifLike(s) {
+    const mt = (s.mime_type || "").toLowerCase();
+    const name = (s.file_name || s.title || "").toLowerCase();
+    return mt === "image/gif" || name.endsWith(".gif");
+  }
+
+  function isImageLike(s) {
+    const mt = (s.mime_type || "").toLowerCase();
+    if (mt.startsWith("image/")) return true;
+    const name = (s.file_name || s.title || "").toLowerCase();
+    return (
+      name.endsWith(".png") ||
+      name.endsWith(".jpg") ||
+      name.endsWith(".jpeg") ||
+      name.endsWith(".webp") ||
+      name.endsWith(".gif")
+    );
+  }
+
+  function dedupeByUrl(arr) {
+    const seen = new Set();
+    return (arr || []).filter((x) => {
+      const u = (x && x.url) || "";
+      if (!u) return false;
+      if (seen.has(u)) return false;
+      seen.add(u);
+      return true;
+    });
+  }
+
+  // Returns a list of groups: [{ title, items }]
+  function buildSourceGroups(primarySources, helpfulAssets) {
+    const p = dedupeByUrl((primarySources || []).map(normalizeSource).filter(Boolean));
+    const h = dedupeByUrl((helpfulAssets || []).map(normalizeSource).filter(Boolean));
+
+    const groups = [];
+
+    // Primary: Articles
+    const primaryArticles = p.filter((s) => s.type === "article");
+    if (primaryArticles.length) {
+      groups.push({ title: "Articles", items: primaryArticles });
+    }
+
+    // Primary: Docs (non-image files)
+    const primaryDocs = p.filter((s) => s.type === "file" && !isImageLike(s));
+    if (primaryDocs.length) {
+      groups.push({ title: "Docs", items: primaryDocs });
+    }
+
+    // Primary: Helpful GIFs (if they happened to be in primary)
+    const primaryGifs = p.filter((s) => s.type === "file" && isGifLike(s));
+    if (primaryGifs.length) {
+      // keep them separate if you want
+      groups.push({ title: "Helpful GIFs", items: primaryGifs });
+    }
+
+    // Helpful assets: Prefer GIFs first
+    const helpfulGifs = h.filter((s) => isGifLike(s));
+    const helpfulImages = h.filter((s) => isImageLike(s) && !isGifLike(s));
+
+    if (helpfulGifs.length) {
+      groups.push({ title: "Helpful GIFs", items: helpfulGifs });
+    }
+    if (helpfulImages.length) {
+      groups.push({ title: "Helpful Images", items: helpfulImages });
+    }
+
+    return groups;
   }
 
   // -------------------------
@@ -509,6 +608,7 @@
 #${ROOT_ID} .blynk-meta.ai{margin-left:40px}
 #${ROOT_ID} .blynk-meta.user{text-align:right; margin-right:40px}
 
+/* typing */
 #${ROOT_ID} .blynk-typing{
   display:inline-flex;
   gap:6px;
@@ -531,29 +631,23 @@
   40%{transform: translateY(-4px); opacity:.85}
 }
 
-/* KB Summary (green box) */
-#${ROOT_ID} .blynk-kbTitle{
-  font-size:12px;
-  font-weight:800;
-  letter-spacing:.02em;
-  color: rgba(var(--blynk-primary-rgb), .95);
-  margin: 0 0 6px 0;
-  text-transform: uppercase;
-}
-#${ROOT_ID} .blynk-bubble.kb{
-  background: rgba(var(--blynk-primary-rgb), .14);
-  border-color: rgba(var(--blynk-primary-rgb), .30);
-}
-#${ROOT_ID} .blynk-bubble.kb:after{display:none}
-#${ROOT_ID} .blynk-kbText{
-  white-space:pre-wrap;
-}
-
 /* Sources (links) */
 #${ROOT_ID} .blynk-sources{
   margin-top:10px;
   padding-top:10px;
   border-top: 1px solid rgba(80,77,97,.10);
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+#${ROOT_ID} .blynk-sourcesTitle{
+  font-size:12px;
+  font-weight:850;
+  letter-spacing:.02em;
+  color: rgba(80,77,97,.62);
+  text-transform: uppercase;
+}
+#${ROOT_ID} .blynk-sourcesGroup{
   display:flex;
   flex-direction:column;
   gap:6px;
@@ -881,35 +975,23 @@
       this.ui.input.disabled = isSending;
     },
 
-    _msgRow({ role, text, meta, sources, kind }) {
-      const row = el("div", { class: `blynk-row ${role}` });
+    _renderSources(groups, bypassRoleFilter) {
+      const wrap = el("div", { class: "blynk-sources" });
+      wrap.appendChild(el("div", { class: "blynk-sourcesTitle", text: "Sources" }));
 
-      const av = el("div", { class: `blynk-avatar ${role}`, "aria-hidden": "true" });
-      if (role === "ai") {
-        av.appendChild(el("img", { alt: "", src: this.tenant.profile_icon || DEFAULT_PROFILE_ICON }));
-      }
+      const maxPerGroup = 5;
 
-      const wrap = el("div");
+      (groups || []).forEach((g) => {
+        if (!g || !Array.isArray(g.items) || !g.items.length) return;
 
-      const bubble = el("div", { class: `blynk-bubble ${role} ${kind || ""} blynk-enter` });
+        const groupEl = el("div", { class: "blynk-sourcesGroup" });
+        groupEl.appendChild(el("div", { class: "blynk-sourcesTitle", text: g.title }));
 
-      if (kind === "kb") {
-        const title = el("div", { class: "blynk-kbTitle", text: "KB Summary" });
-        const body = el("div", { class: "blynk-kbText" });
-        body.textContent = text;
-        bubble.appendChild(title);
-        bubble.appendChild(body);
-      } else {
-        bubble.textContent = text;
-      }
-
-      if (Array.isArray(sources) && sources.length) {
-        const sourcesEl = el("div", { class: "blynk-sources" });
-
-        sources.slice(0, 5).forEach((s) => {
+        g.items.slice(0, maxPerGroup).forEach((s) => {
           const href = safeLink(s.url);
           if (!href) return;
 
+          // if backend says "bypass", we can show everything; otherwise filter already done before calling
           const a = el("a", {
             class: "blynk-source",
             href,
@@ -919,10 +1001,30 @@
 
           const icon = sourceIcon(s);
           a.textContent = `${icon} ${s.title || href}`;
-          sourcesEl.appendChild(a);
+          groupEl.appendChild(a);
         });
 
-        bubble.appendChild(sourcesEl);
+        wrap.appendChild(groupEl);
+      });
+
+      return wrap;
+    },
+
+    _msgRow({ role, text, meta, sourcesGroups, bypassRoleFilter }) {
+      const row = el("div", { class: `blynk-row ${role}` });
+
+      const av = el("div", { class: `blynk-avatar ${role}`, "aria-hidden": "true" });
+      if (role === "ai") {
+        av.appendChild(el("img", { alt: "", src: this.tenant.profile_icon || DEFAULT_PROFILE_ICON }));
+      }
+
+      const wrap = el("div");
+
+      const bubble = el("div", { class: `blynk-bubble ${role} blynk-enter` });
+      bubble.textContent = text;
+
+      if (Array.isArray(sourcesGroups) && sourcesGroups.length) {
+        bubble.appendChild(this._renderSources(sourcesGroups, bypassRoleFilter));
       }
 
       const m = el("div", { class: `blynk-meta ${role}`, text: meta });
@@ -941,16 +1043,11 @@
       return row;
     },
 
-    appendMessage(role, text, sources, kind) {
-      const meta =
-        kind === "kb"
-          ? "KB Summary • now"
-          : role === "user"
-          ? "You • now"
-          : "Blynky • now";
+    appendMessage(role, text, sourcesGroups, bypassRoleFilter) {
+      const meta = role === "user" ? "You • now" : "Blynky • now";
 
       this.ui.stage.insertBefore(
-        this._msgRow({ role, text, meta, sources, kind }),
+        this._msgRow({ role, text, meta, sourcesGroups, bypassRoleFilter }),
         this._typingRow || null
       );
       this.scrollToBottom();
@@ -1000,23 +1097,37 @@
 
         const data = await res.json();
 
+        // Backend-driven role-filter bypass (demo mode)
         const bypassRoleFilter = Boolean(data && (data.disableRoleFilter || data.disable_role_filter));
-        const allSources = Array.isArray(data?.sources) ? data.sources : [];
-        const visibleSources = bypassRoleFilter ? allSources : filterSourcesByRole(allSources, this.config.role);
 
-        // --- NEW: KB summary panel (before AI answer) ---
-        const kbSummary =
-          (data && (data.kb_summary || data.kbSummary || data.summary || data.kbSummaryText)) || "";
+        // NEW preferred shape
+        const primarySourcesRaw = Array.isArray(data?.primary_sources) ? data.primary_sources : [];
+        const helpfulAssetsRaw = Array.isArray(data?.helpful_assets) ? data.helpful_assets : [];
 
-        // Hide typing before we show summary/answer
+        // Legacy fallback
+        const legacySourcesRaw = Array.isArray(data?.sources) ? data.sources : [];
+
+        // Role filtering (only when backend isn't bypassing)
+        const primarySources = bypassRoleFilter
+          ? primarySourcesRaw
+          : filterSourcesByRole(primarySourcesRaw, this.config.role);
+
+        const helpfulAssets = bypassRoleFilter
+          ? helpfulAssetsRaw
+          : filterSourcesByRole(helpfulAssetsRaw, this.config.role);
+
+        // If backend hasn't upgraded yet, use legacy as "primary"
+        const primaryFallback = primarySources.length ? primarySources : legacySourcesRaw;
+        const primaryFinal = bypassRoleFilter
+          ? primaryFallback
+          : filterSourcesByRole(primaryFallback, this.config.role);
+
+        const sourceGroups = buildSourceGroups(primaryFinal, helpfulAssets);
+
         this.setTyping(false);
 
-        if (kbSummary && String(kbSummary).trim()) {
-          this.appendMessage("ai", String(kbSummary).trim(), null, "kb");
-        }
-
         const answer = (data?.answer || "No answer returned.").toString();
-        this.appendMessage("ai", answer, visibleSources);
+        this.appendMessage("ai", answer, sourceGroups, bypassRoleFilter);
       } catch (err) {
         this.setTyping(false);
         this.appendMessage("ai", "Sorry — something went wrong. Please try again.");
