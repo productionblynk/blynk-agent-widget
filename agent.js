@@ -1,20 +1,10 @@
 /* =====================================================
-   B-lynk Agent Widget — Phase 1 (Refreshed UI Skin)
-   Vanilla JS | Auto-boot | UI Renderer + Supabase Ask
-   - Frosty "Blynky" UI
-   - Scoped styles (no global :root/body/html selectors)
-   - Tenant avatar via tenants.profile_icon (fallback default)
-   - Tenant theme colors via update_tenant_settings GET:
-       { theme: { primary, accent, launcher } }
-
-   NEW (Source Grouping):
-   - Renders:
-     Primary Sources (used to answer)
-       - Articles
-       - Docs
-     Helpful Assets (optional)
-       - Helpful GIFs
-       - Images
+   B-lynk Agent Widget — Sources Grouping Upgrade
+   - Adds Primary Sources vs Helpful Assets sections
+   - Uses ask() response fields:
+       sources_primary, sources_helpful (preferred)
+       sources (fallback)
+   - Stops probing get_tenant_settings to reduce CORS noise
 ===================================================== */
 
 (function () {
@@ -70,7 +60,7 @@
       scriptEl.getAttribute("data-quick-actions") ||
       "Reset password|Track order|Contact support",
 
-    // Legacy explicit accent overrides (still supported)
+    // Legacy explicit accent overrides
     accentCoral: scriptEl.getAttribute("data-accent-coral") || "",
     accentMint: scriptEl.getAttribute("data-accent-mint") || "",
 
@@ -83,12 +73,6 @@
       "[Blynk Agent] Missing or invalid data-api-url. Must be a full URL like https://YOURPROJECT.supabase.co/functions/v1/ask"
     );
     return;
-  }
-
-  if (!config.anonKey) {
-    console.warn(
-      "[Blynk Agent] Missing data-anon-key. If your function requires Authorization, you will get 401 until you add it."
-    );
   }
 
   function log(...args) {
@@ -104,7 +88,7 @@
   }
 
   // -------------------------
-  // Color helpers (safe fallbacks)
+  // Color helpers
   // -------------------------
   function hexToRgb(hex) {
     const s = String(hex || "").trim();
@@ -141,63 +125,61 @@
     }
   }
 
-  function extFromName(name) {
-    const n = String(name || "").toLowerCase().trim();
-    const idx = n.lastIndexOf(".");
-    if (idx === -1) return "";
-    return n.slice(idx + 1);
-  }
-
-  function kindFromSource(s) {
-    if (s && s.type === "article") return "article";
-    const nm = String((s && (s.file_name || s.title)) || "").toLowerCase();
-    const ext = extFromName(nm);
-    if (ext === "gif") return "gif";
-    if (["png", "jpg", "jpeg", "webp", "bmp", "svg"].includes(ext)) return "image";
-    if (["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "csv"].includes(ext)) return "doc";
-    return "other";
-  }
-
-  // ✅ Source icons for links
+  // -------------------------
+  // Source helpers
+  // -------------------------
   function sourceIcon(source) {
-    const k = kindFromSource(source);
-    if (k === "article") return "📘";
-    if (k === "doc") return "📄";
-    if (k === "gif") return "🎞️";
-    if (k === "image") return "🖼️";
+    if (source && source.type === "article") return "📘";
+
+    const name = ((source && source.file_name) || (source && source.title) || "")
+      .toString()
+      .toLowerCase();
+
+    if (name.endsWith(".pdf")) return "📄";
+    if (name.endsWith(".gif")) return "🎞️";
+    if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".webp"))
+      return "🖼️";
+    if (name.endsWith(".doc") || name.endsWith(".docx")) return "📝";
+    if (name.endsWith(".xls") || name.endsWith(".xlsx")) return "📊";
+
     return "📎";
   }
 
-  // UI-only source filtering (used only when backend is enforcing RBAC)
+  function normalizeAudienceRole(s) {
+    const ar = (s && (s.audience_role || s.audienceRole || "user"))
+      .toString()
+      .toLowerCase()
+      .trim();
+    return ar === "admin" ? "admin" : "user";
+  }
+
   function filterSourcesByRole(sources, role) {
     if (!Array.isArray(sources)) return [];
     if (role === "admin") return sources;
-
-    return sources.filter((s) => {
-      const ar = (s && (s.audience_role || s.audienceRole || "user"))
-        .toString()
-        .toLowerCase()
-        .trim();
-      return ar === "user";
-    });
+    return sources.filter((s) => normalizeAudienceRole(s) === "user");
   }
 
-  function groupSources(flatSources) {
-    const out = {
-      primary: { articles: [], docs: [] },
-      helpful: { gifs: [], images: [], other: [] },
-    };
+  function groupSourcesFromResponse(data, role, bypassRoleFilter) {
+    const primary = Array.isArray(data?.sources_primary) ? data.sources_primary : null;
+    const helpful = Array.isArray(data?.sources_helpful) ? data.sources_helpful : null;
+    const flat = Array.isArray(data?.sources) ? data.sources : [];
 
-    (flatSources || []).forEach((s) => {
-      const k = kindFromSource(s);
-      if (k === "article") out.primary.articles.push(s);
-      else if (k === "doc") out.primary.docs.push(s);
-      else if (k === "gif") out.helpful.gifs.push(s);
-      else if (k === "image") out.helpful.images.push(s);
-      else out.helpful.other.push(s);
-    });
+    let primaryOut = primary || [];
+    let helpfulOut = helpful || [];
 
-    return out;
+    // If backend didn’t send grouped sources, do a reasonable UI fallback
+    if (!primary && !helpful) {
+      // articles => primary, everything else => helpful
+      primaryOut = flat.filter((s) => (s && s.type) === "article");
+      helpfulOut = flat.filter((s) => (s && s.type) !== "article");
+    }
+
+    if (!bypassRoleFilter) {
+      primaryOut = filterSourcesByRole(primaryOut, role);
+      helpfulOut = filterSourcesByRole(helpfulOut, role);
+    }
+
+    return { primary: primaryOut, helpful: helpfulOut };
   }
 
   // -------------------------
@@ -223,11 +205,10 @@
 
     if (config.settingsUrl) candidates.push(config.settingsUrl);
 
+    // Only try update_tenant_settings (GET supported in your code)
     if (apiBase) {
-      candidates.push(`${apiBase}/update_tenant_settings`); // your GET handler returns settings
+      candidates.push(`${apiBase}/update_tenant_settings`);
     }
-
-    if (!candidates.length) return null;
 
     for (const baseUrl of candidates) {
       try {
@@ -279,7 +260,6 @@
     const style = document.createElement("style");
     style.id = STYLE_ID;
 
-    // NOTE: Everything is scoped under #blynk-agent-root
     style.textContent = `
 #${ROOT_ID}{all:initial}
 #${ROOT_ID} *{box-sizing:border-box;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,"Helvetica Neue",sans-serif}
@@ -315,11 +295,9 @@
 }
 #${ROOT_ID} .blynk-panel.open{display:block}
 
-/* ---- Widget vars (scoped) ---- */
 #${ROOT_ID} .blynk-widget{
   --blynk-primary: var(--blynk-primary);
   --blynk-accent: var(--blynk-accent);
-
   --blynk-primary-rgb: var(--blynk-primary-rgb);
   --blynk-accent-rgb: var(--blynk-accent-rgb);
 
@@ -338,7 +316,6 @@
   grid-template-rows:auto 1fr auto;
 }
 
-/* frosty gradient behind everything (inside widget only) */
 #${ROOT_ID} .blynk-widget::before{
   content:"";
   position:absolute;
@@ -367,7 +344,6 @@
   pointer-events:none;
 }
 
-/* make UI above layers */
 #${ROOT_ID} .blynk-head,
 #${ROOT_ID} .blynk-stage,
 #${ROOT_ID} .blynk-composer{
@@ -375,7 +351,6 @@
   z-index:2;
 }
 
-/* ---- Header ---- */
 #${ROOT_ID} .blynk-head{
   position:sticky; top:0; z-index:5;
   background: linear-gradient(180deg, rgba(255,255,255,.82), rgba(255,255,255,.62));
@@ -383,6 +358,7 @@
   -webkit-backdrop-filter: blur(var(--blur));
   border-bottom: 1px solid rgba(80,77,97,.10);
 }
+
 #${ROOT_ID} .blynk-header{
   padding:18px 16px 12px;
   display:flex; align-items:flex-start; justify-content:space-between; gap:12px;
@@ -441,7 +417,6 @@
 }
 #${ROOT_ID} .blynk-chip:hover{transform: translateY(-1px); border-color: rgba(var(--blynk-primary-rgb), .28)}
 
-/* ---- Messages ---- */
 #${ROOT_ID} .blynk-stage{
   padding: 14px 14px 10px;
   overflow:auto;
@@ -539,7 +514,6 @@
 #${ROOT_ID} .blynk-meta.ai{margin-left:40px}
 #${ROOT_ID} .blynk-meta.user{text-align:right; margin-right:40px}
 
-/* Typing */
 #${ROOT_ID} .blynk-typing{
   display:inline-flex;
   gap:6px;
@@ -562,29 +536,44 @@
   40%{transform: translateY(-4px); opacity:.85}
 }
 
-/* Sources (grouped) */
+/* KB Summary */
+#${ROOT_ID} .blynk-kbTitle{
+  font-size:12px;
+  font-weight:800;
+  letter-spacing:.02em;
+  color: rgba(var(--blynk-primary-rgb), .95);
+  margin: 0 0 6px 0;
+  text-transform: uppercase;
+}
+#${ROOT_ID} .blynk-bubble.kb{
+  background: rgba(var(--blynk-primary-rgb), .14);
+  border-color: rgba(var(--blynk-primary-rgb), .30);
+}
+#${ROOT_ID} .blynk-bubble.kb:after{display:none}
+#${ROOT_ID} .blynk-kbText{
+  white-space:pre-wrap;
+}
+
+/* Sources */
 #${ROOT_ID} .blynk-sources{
   margin-top:10px;
   padding-top:10px;
   border-top: 1px solid rgba(80,77,97,.10);
   display:flex;
   flex-direction:column;
-  gap:8px;
+  gap:10px;
 }
 #${ROOT_ID} .blynk-sourcesTitle{
   font-size:12px;
-  font-weight:850;
+  font-weight:900;
   letter-spacing:.02em;
-  color: rgba(80,77,97,.78);
+  color: rgba(80,77,97,.55);
   text-transform: uppercase;
 }
-#${ROOT_ID} .blynk-groupTitle{
-  font-size:11px;
-  font-weight:850;
-  letter-spacing:.02em;
-  color: rgba(80,77,97,.62);
-  text-transform: uppercase;
-  margin-top:2px;
+#${ROOT_ID} .blynk-sourcesSection{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
 }
 #${ROOT_ID} .blynk-source{
   font-size:12px;
@@ -596,7 +585,7 @@
 }
 #${ROOT_ID} .blynk-source:hover{text-decoration:underline}
 
-/* ---- Composer ---- */
+/* Composer */
 #${ROOT_ID} .blynk-composer{
   padding:12px;
   border-top:1px solid rgba(80,77,97,.10);
@@ -681,7 +670,6 @@
       injectStylesOnce();
       this.root = createRoot();
 
-      // Try to load tenant settings (avatar/theme)
       try {
         const t = await fetchTenantSettings();
         if (t) {
@@ -718,7 +706,6 @@
     mountUI() {
       const wrap = el("div", { class: "blynk-wrap" });
 
-      // Apply theme vars at wrap level (affects launcher + widget via inheritance)
       setThemeVars(wrap, {
         primary: this.tenant.theme_primary || (config.accentMint || ""),
         accent: this.tenant.theme_accent || (config.accentCoral || ""),
@@ -737,7 +724,6 @@
         "aria-label": "Ask Blynky chat widget",
       });
 
-      // If tenant has values, override on widget too (explicit)
       setThemeVars(widget, {
         primary: this.tenant.theme_primary || "",
         accent: this.tenant.theme_accent || "",
@@ -745,9 +731,7 @@
       });
 
       const head = el("div", { class: "blynk-head" });
-
       const headerRow = el("div", { class: "blynk-header" });
-
       const brand = el("div", { class: "blynk-brand" });
 
       const logo = el("div", { class: "blynk-logo", "aria-hidden": "true" });
@@ -802,8 +786,6 @@
       head.appendChild(chips);
 
       const stage = el("div", { class: "blynk-stage" });
-      stage.id = "blynkStage";
-
       stage.appendChild(this._msgRow({ role: "ai", text: "Hi! How can I help today?", meta: "Blynky • just now" }));
 
       // typing row
@@ -820,23 +802,20 @@
       typingRow.appendChild(typingBubble);
       typingRow.style.display = "none";
       stage.appendChild(typingRow);
-
       this._typingRow = typingRow;
 
       // composer
       const composer = el("div", { class: "blynk-composer" });
-
       const inputWrap = el("div", { class: "blynk-inputWrap" });
       const input = el("input", {
         class: "blynk-input",
-        id: "blynkInput",
         type: "text",
         placeholder: "Ask a question...",
         autocomplete: "off",
       });
       inputWrap.appendChild(input);
 
-      const sendBtn = el("button", { class: "blynk-send", id: "blynkSendBtn", type: "button", text: "Send" });
+      const sendBtn = el("button", { class: "blynk-send", type: "button", text: "Send" });
 
       sendBtn.addEventListener("click", () => this.handleSend());
       input.addEventListener("keydown", (e) => {
@@ -873,7 +852,6 @@
       this.root.appendChild(wrap);
 
       this.ui = { wrap, panel, widget, head, stage, composer, input, sendBtn, launcher };
-
       this.close();
     },
 
@@ -909,49 +887,60 @@
       this.ui.input.disabled = isSending;
     },
 
-    _renderGroupedSources(container, grouped) {
-      // grouped: { primarySources: [], helpfulAssets: [] } OR built from flat array
-      const flatPrimary = Array.isArray(grouped?.primarySources) ? grouped.primarySources : [];
-      const flatHelpful = Array.isArray(grouped?.helpfulAssets) ? grouped.helpfulAssets : [];
+    _renderSourcesGrouped(grouped) {
+      const container = el("div", { class: "blynk-sources" });
 
-      const gPrimary = groupSources(flatPrimary);
-      const gHelpful = groupSources(flatHelpful);
-
-      const addSection = (title, items) => {
-        if (!Array.isArray(items) || items.length === 0) return;
-        container.appendChild(el("div", { class: "blynk-groupTitle", text: title }));
-        items.slice(0, 6).forEach((s) => {
-          const href = safeLink(s.url);
-          if (!href) return;
-          const a = el("a", {
-            class: "blynk-source",
-            href,
-            target: "_blank",
-            rel: "noopener noreferrer",
-          });
-          a.textContent = `${sourceIcon(s)} ${s.title || s.file_name || href}`;
-          container.appendChild(a);
-        });
-      };
+      container.appendChild(el("div", { class: "blynk-sourcesTitle", text: "Sources" }));
 
       // Primary
-      container.appendChild(el("div", { class: "blynk-sourcesTitle", text: "Sources" }));
-      if (flatPrimary.length) {
-        container.appendChild(el("div", { class: "blynk-groupTitle", text: "Primary Sources (used to answer)" }));
-        addSection("Articles", gPrimary.primary.articles);
-        addSection("Docs", gPrimary.primary.docs);
+      const primaryTitle = el("div", { class: "blynk-sourcesTitle", text: "Primary Sources (used to answer)" });
+      const primaryWrap = el("div", { class: "blynk-sourcesSection" });
+
+      (grouped.primary || []).slice(0, 5).forEach((s) => {
+        const href = safeLink(s.url);
+        if (!href) return;
+        const a = el("a", {
+          class: "blynk-source",
+          href,
+          target: "_blank",
+          rel: "noopener noreferrer",
+        });
+        a.textContent = `${sourceIcon(s)} ${s.title || href}`;
+        primaryWrap.appendChild(a);
+      });
+
+      // Helpful
+      const helpfulTitle = el("div", { class: "blynk-sourcesTitle", text: "Helpful Assets (optional)" });
+      const helpfulWrap = el("div", { class: "blynk-sourcesSection" });
+
+      (grouped.helpful || []).slice(0, 8).forEach((s) => {
+        const href = safeLink(s.url);
+        if (!href) return;
+        const a = el("a", {
+          class: "blynk-source",
+          href,
+          target: "_blank",
+          rel: "noopener noreferrer",
+        });
+        a.textContent = `${sourceIcon(s)} ${s.title || href}`;
+        helpfulWrap.appendChild(a);
+      });
+
+      // Only show sections if they have items
+      if (primaryWrap.children.length) {
+        container.appendChild(primaryTitle);
+        container.appendChild(primaryWrap);
       }
 
-      // Helpful Assets
-      if (flatHelpful.length) {
-        container.appendChild(el("div", { class: "blynk-groupTitle", text: "Helpful Assets (optional)" }));
-        addSection("Helpful GIFs", gHelpful.helpful.gifs);
-        addSection("Images", gHelpful.helpful.images);
-        addSection("Other", gHelpful.helpful.other);
+      if (helpfulWrap.children.length) {
+        container.appendChild(helpfulTitle);
+        container.appendChild(helpfulWrap);
       }
+
+      return container;
     },
 
-    _msgRow({ role, text, meta, sourcesPayload }) {
+    _msgRow({ role, text, meta, sourcesGrouped, kind }) {
       const row = el("div", { class: `blynk-row ${role}` });
 
       const av = el("div", { class: `blynk-avatar ${role}`, "aria-hidden": "true" });
@@ -960,14 +949,20 @@
       }
 
       const wrap = el("div");
-      const bubble = el("div", { class: `blynk-bubble ${role} blynk-enter` });
-      bubble.textContent = text;
+      const bubble = el("div", { class: `blynk-bubble ${role} ${kind || ""} blynk-enter` });
 
-      // sources rendering (grouped)
-      if (sourcesPayload) {
-        const sourcesEl = el("div", { class: "blynk-sources" });
-        this._renderGroupedSources(sourcesEl, sourcesPayload);
-        bubble.appendChild(sourcesEl);
+      if (kind === "kb") {
+        const title = el("div", { class: "blynk-kbTitle", text: "KB Summary" });
+        const body = el("div", { class: "blynk-kbText" });
+        body.textContent = text;
+        bubble.appendChild(title);
+        bubble.appendChild(body);
+      } else {
+        bubble.textContent = text;
+      }
+
+      if (sourcesGrouped && (sourcesGrouped.primary?.length || sourcesGrouped.helpful?.length)) {
+        bubble.appendChild(this._renderSourcesGrouped(sourcesGrouped));
       }
 
       const m = el("div", { class: `blynk-meta ${role}`, text: meta });
@@ -986,11 +981,16 @@
       return row;
     },
 
-    appendMessage(role, text, sourcesPayload) {
-      const meta = role === "user" ? "You • now" : "Blynky • now";
+    appendMessage(role, text, sourcesGrouped, kind) {
+      const meta =
+        kind === "kb"
+          ? "KB Summary • now"
+          : role === "user"
+          ? "You • now"
+          : "Blynky • now";
 
       this.ui.stage.insertBefore(
-        this._msgRow({ role, text, meta, sourcesPayload }),
+        this._msgRow({ role, text, meta, sourcesGrouped, kind }),
         this._typingRow || null
       );
       this.scrollToBottom();
@@ -1042,33 +1042,19 @@
 
         const bypassRoleFilter = Boolean(data && (data.disableRoleFilter || data.disable_role_filter));
 
-        // Prefer new grouped payload from backend
-        const sg = data && data.source_groups ? data.source_groups : null;
+        const grouped = groupSourcesFromResponse(data, this.config.role, bypassRoleFilter);
 
-        // Back-compat: if only flat sources exist, we group client-side
-        const allSources = Array.isArray(data?.sources) ? data.sources : [];
-        const visibleFlat = bypassRoleFilter ? allSources : filterSourcesByRole(allSources, this.config.role);
+        const kbSummary =
+          (data && (data.kb_summary || data.kbSummary || data.summary || data.kbSummaryText)) || "";
 
-        const sourcesPayload = sg
-          ? {
-              primarySources: bypassRoleFilter
-                ? (Array.isArray(sg.primarySources) ? sg.primarySources : [])
-                : filterSourcesByRole(sg.primarySources || [], this.config.role),
-              helpfulAssets: bypassRoleFilter
-                ? (Array.isArray(sg.helpfulAssets) ? sg.helpfulAssets : [])
-                : filterSourcesByRole(sg.helpfulAssets || [], this.config.role),
-            }
-          : {
-              // fallback grouping if server didn't send grouped blocks
-              primarySources: visibleFlat.filter((s) => ["article", "file"].includes((s.type || "").toLowerCase())),
-              helpfulAssets: [],
-            };
-
-        // Hide typing before we show answer
         this.setTyping(false);
 
+        if (kbSummary && String(kbSummary).trim()) {
+          this.appendMessage("ai", String(kbSummary).trim(), null, "kb");
+        }
+
         const answer = (data?.answer || "No answer returned.").toString();
-        this.appendMessage("ai", answer, sourcesPayload);
+        this.appendMessage("ai", answer, grouped);
       } catch (err) {
         this.setTyping(false);
         this.appendMessage("ai", "Sorry — something went wrong. Please try again.");
