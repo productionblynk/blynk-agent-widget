@@ -1,10 +1,7 @@
 /* =====================================================
-   B-lynk Agent Widget — Sources Grouping Upgrade
-   - Adds Primary Sources vs Helpful Assets sections
-   - Uses ask() response fields:
-       sources_primary, sources_helpful (preferred)
-       sources (fallback)
-   - Stops probing get_tenant_settings to reduce CORS noise
+   B-lynk Agent Widget — Grouped Sources UI
+   - Primary Sources (used to answer) vs Helpful Assets (optional)
+   - Keeps your frosty UI + tenant theme/profile
 ===================================================== */
 
 (function () {
@@ -40,31 +37,25 @@
     mode: scriptEl.getAttribute("data-mode") || "blynk_kb",
     debug: scriptEl.hasAttribute("data-debug"),
 
-    // text
     title: scriptEl.getAttribute("data-title") || "Blynky",
     kicker: scriptEl.getAttribute("data-kicker") || "Ask",
     subcopy:
       scriptEl.getAttribute("data-subcopy") ||
       "Blynky will search articles and assist you with your questions.",
 
-    // keys / role hints
     anonKey: scriptEl.getAttribute("data-anon-key") || "",
     role: (scriptEl.getAttribute("data-role") || "user").toLowerCase(),
     adminToken: scriptEl.getAttribute("data-admin-token") || "",
 
-    // Optional: point directly to settings function
     settingsUrl: scriptEl.getAttribute("data-settings-url") || "",
 
-    // Optional UI quick actions (pipe-separated labels)
     quickActions:
       scriptEl.getAttribute("data-quick-actions") ||
       "Reset password|Track order|Contact support",
 
-    // Legacy explicit accent overrides
     accentCoral: scriptEl.getAttribute("data-accent-coral") || "",
     accentMint: scriptEl.getAttribute("data-accent-mint") || "",
 
-    // Optional explicit profile icon override
     profileIcon: scriptEl.getAttribute("data-profile-icon") || "",
   };
 
@@ -85,6 +76,13 @@
     } catch {
       return null;
     }
+  }
+
+  function extOf(nameOrUrl) {
+    const s = String(nameOrUrl || "").toLowerCase().trim();
+    const clean = s.split("?")[0].split("#")[0];
+    const m = clean.match(/\.([a-z0-9]+)$/i);
+    return m ? m[1] : "";
   }
 
   // -------------------------
@@ -126,64 +124,37 @@
   }
 
   // -------------------------
-  // Source helpers
+  // Icon for sources
   // -------------------------
-  function sourceIcon(source) {
-    if (source && source.type === "article") return "📘";
+  function sourceIcon(s) {
+    if (!s) return "📎";
+    if (s.kind === "article" || s.type === "article") return "📘";
 
-    const name = ((source && source.file_name) || (source && source.title) || "")
-      .toString()
-      .toLowerCase();
+    const name = String(s.file_name || s.title || s.url || "").toLowerCase();
+    const ext = extOf(name);
 
-    if (name.endsWith(".pdf")) return "📄";
-    if (name.endsWith(".gif")) return "🎞️";
-    if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".webp"))
-      return "🖼️";
-    if (name.endsWith(".doc") || name.endsWith(".docx")) return "📝";
-    if (name.endsWith(".xls") || name.endsWith(".xlsx")) return "📊";
+    if (ext === "pdf") return "📄";
+    if (ext === "gif") return "🎞️";
+    if (["png", "jpg", "jpeg", "webp", "svg"].includes(ext)) return "🖼️";
+    if (["doc", "docx"].includes(ext)) return "📝";
+    if (["xls", "xlsx"].includes(ext)) return "📊";
 
     return "📎";
   }
 
-  function normalizeAudienceRole(s) {
-    const ar = (s && (s.audience_role || s.audienceRole || "user"))
-      .toString()
-      .toLowerCase()
-      .trim();
-    return ar === "admin" ? "admin" : "user";
-  }
+  // UI-only source filtering (used only when backend is enforcing RBAC)
+  function filterSourcesByRole(list, role) {
+    if (!Array.isArray(list)) return [];
+    if (role === "admin") return list;
 
-  function filterSourcesByRole(sources, role) {
-    if (!Array.isArray(sources)) return [];
-    if (role === "admin") return sources;
-    return sources.filter((s) => normalizeAudienceRole(s) === "user");
-  }
-
-  function groupSourcesFromResponse(data, role, bypassRoleFilter) {
-    const primary = Array.isArray(data?.sources_primary) ? data.sources_primary : null;
-    const helpful = Array.isArray(data?.sources_helpful) ? data.sources_helpful : null;
-    const flat = Array.isArray(data?.sources) ? data.sources : [];
-
-    let primaryOut = primary || [];
-    let helpfulOut = helpful || [];
-
-    // If backend didn’t send grouped sources, do a reasonable UI fallback
-    if (!primary && !helpful) {
-      // articles => primary, everything else => helpful
-      primaryOut = flat.filter((s) => (s && s.type) === "article");
-      helpfulOut = flat.filter((s) => (s && s.type) !== "article");
-    }
-
-    if (!bypassRoleFilter) {
-      primaryOut = filterSourcesByRole(primaryOut, role);
-      helpfulOut = filterSourcesByRole(helpfulOut, role);
-    }
-
-    return { primary: primaryOut, helpful: helpfulOut };
+    return list.filter((s) => {
+      const ar = String(s.audience_role || s.audienceRole || "user").toLowerCase().trim();
+      return ar === "user";
+    });
   }
 
   // -------------------------
-  // TENANT SETTINGS (avatar/theme)
+  // TENANT SETTINGS
   // -------------------------
   function apiBaseFromAskUrl(askUrl) {
     try {
@@ -203,12 +174,14 @@
     const apiBase = apiBaseFromAskUrl(config.apiUrl);
     const candidates = [];
 
+    // Prefer explicit
     if (config.settingsUrl) candidates.push(config.settingsUrl);
 
-    // Only try update_tenant_settings (GET supported in your code)
-    if (apiBase) {
-      candidates.push(`${apiBase}/update_tenant_settings`);
-    }
+    // Prefer update_tenant_settings GET (your function supports GET)
+    if (apiBase) candidates.push(`${apiBase}/update_tenant_settings`);
+
+    // NOTE: we intentionally do NOT try get_tenant_settings anymore
+    // because your console showed it failing preflight sometimes.
 
     for (const baseUrl of candidates) {
       try {
@@ -267,11 +240,9 @@
 #${ROOT_ID} .blynk-wrap{
   position:fixed; bottom:24px; right:24px; z-index:999999;
   display:flex; flex-direction:column; gap:10px; align-items:flex-end;
-
   --blynk-primary: ${config.accentMint || "#6ecace"};
   --blynk-accent: ${config.accentCoral || "#ed5b4e"};
   --blynk-launcher: ${config.accentMint || "#6ecace"};
-
   --blynk-primary-rgb: 110, 202, 206;
   --blynk-accent-rgb: 237, 91, 78;
   --blynk-launcher-rgb: 110, 202, 206;
@@ -300,14 +271,12 @@
   --blynk-accent: var(--blynk-accent);
   --blynk-primary-rgb: var(--blynk-primary-rgb);
   --blynk-accent-rgb: var(--blynk-accent-rgb);
-
   --ink:#504d61;
   --shadow: rgba(80, 77, 97, 0.08);
   --radius-xl: 24px;
   --blur: 18px;
   --ease: cubic-bezier(.2,.8,.2,1);
   --ease-soft: cubic-bezier(.22,.9,.2,1);
-
   position:relative;
   width:100%;
   height:100%;
@@ -377,9 +346,7 @@
   display:grid; place-items:center;
   overflow:hidden;
 }
-#${ROOT_ID} .blynk-logoImg{
-  width:80%; height:100%; object-fit:contain; border-radius:999px; display:block;
-}
+#${ROOT_ID} .blynk-logoImg{width:80%; height:100%; object-fit:contain; border-radius:999px; display:block;}
 #${ROOT_ID} .blynk-brandText{display:flex; flex-direction:column; gap:2px; min-width:0}
 #${ROOT_ID} .blynk-kicker{font-size:13px; font-weight:650; color: rgba(80,77,97,.78); line-height:1.1}
 #${ROOT_ID} .blynk-title{font-size:22px; font-weight:800; line-height:1.05; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
@@ -464,40 +431,9 @@
   overflow:hidden;
   color: rgba(0,0,0,1);
 }
-#${ROOT_ID} .blynk-bubble:before{
-  content:"";
-  position:absolute;
-  inset:-60px;
-  background: radial-gradient(circle at 20% 20%, rgba(255,255,255,.55), transparent 55%);
-  opacity:.55;
-  transform: rotate(10deg);
-  pointer-events:none;
-}
-
 #${ROOT_ID} .blynk-bubble.user{
   background: rgba(170, 170, 178, 0.75);
   border-color: rgba(80, 77, 97, 0.4);
-}
-
-#${ROOT_ID} .blynk-bubble.ai:after{
-  content:"";
-  position:absolute;
-  left:-6px; bottom:10px;
-  width:14px; height:14px;
-  background: rgba(255,255,255,.62);
-  border-left: 1px solid rgba(80,77,97,.10);
-  border-bottom: 1px solid rgba(80,77,97,.10);
-  transform: rotate(45deg);
-}
-#${ROOT_ID} .blynk-bubble.user:after{
-  content:"";
-  position:absolute;
-  right:-6px; bottom:10px;
-  width:14px; height:14px;
-  background: rgba(var(--blynk-primary-rgb), .16);
-  border-right: 1px solid rgba(var(--blynk-primary-rgb), .22);
-  border-top: 1px solid rgba(var(--blynk-primary-rgb), .10);
-  transform: rotate(45deg);
 }
 
 #${ROOT_ID} .blynk-enter{animation: blynkPopIn 380ms var(--ease-soft) both}
@@ -536,44 +472,37 @@
   40%{transform: translateY(-4px); opacity:.85}
 }
 
-/* KB Summary */
-#${ROOT_ID} .blynk-kbTitle{
-  font-size:12px;
-  font-weight:800;
-  letter-spacing:.02em;
-  color: rgba(var(--blynk-primary-rgb), .95);
-  margin: 0 0 6px 0;
-  text-transform: uppercase;
-}
-#${ROOT_ID} .blynk-bubble.kb{
-  background: rgba(var(--blynk-primary-rgb), .14);
-  border-color: rgba(var(--blynk-primary-rgb), .30);
-}
-#${ROOT_ID} .blynk-bubble.kb:after{display:none}
-#${ROOT_ID} .blynk-kbText{
-  white-space:pre-wrap;
-}
-
-/* Sources */
+/* Sources block */
 #${ROOT_ID} .blynk-sources{
   margin-top:10px;
   padding-top:10px;
   border-top: 1px solid rgba(80,77,97,.10);
   display:flex;
   flex-direction:column;
-  gap:10px;
+  gap:8px;
 }
 #${ROOT_ID} .blynk-sourcesTitle{
   font-size:12px;
   font-weight:900;
   letter-spacing:.02em;
-  color: rgba(80,77,97,.55);
+  color: rgba(80,77,97,.72);
   text-transform: uppercase;
 }
-#${ROOT_ID} .blynk-sourcesSection{
-  display:flex;
-  flex-direction:column;
-  gap:6px;
+#${ROOT_ID} .blynk-sourcesSectionTitle{
+  font-size:11px;
+  font-weight:900;
+  letter-spacing:.02em;
+  color: rgba(80,77,97,.55);
+  text-transform: uppercase;
+  margin-top:4px;
+}
+#${ROOT_ID} .blynk-sourcesGroupTitle{
+  font-size:11px;
+  font-weight:900;
+  letter-spacing:.02em;
+  color: rgba(var(--blynk-primary-rgb), .85);
+  text-transform: uppercase;
+  margin-top:4px;
 }
 #${ROOT_ID} .blynk-source{
   font-size:12px;
@@ -585,7 +514,6 @@
 }
 #${ROOT_ID} .blynk-source:hover{text-decoration:underline}
 
-/* Composer */
 #${ROOT_ID} .blynk-composer{
   padding:12px;
   border-top:1px solid rgba(80,77,97,.10);
@@ -648,6 +576,111 @@
   }
 
   // -------------------------
+  // Source grouping for UI
+  // -------------------------
+  function normalizeGroupedSources(data) {
+    // New format
+    if (data && data.sources && typeof data.sources === "object" && !Array.isArray(data.sources)) {
+      const primary = Array.isArray(data.sources.primary) ? data.sources.primary : [];
+      const assets = Array.isArray(data.sources.assets) ? data.sources.assets : [];
+      return { primary, assets };
+    }
+
+    // Back-compat
+    const flat =
+      (data && Array.isArray(data.sources_flat) && data.sources_flat) ||
+      (data && Array.isArray(data.sources) && data.sources) ||
+      [];
+
+    // Try to split using kind/asset_type/ext
+    const primary = [];
+    const assets = [];
+    flat.forEach((s) => {
+      const kind = (s && s.kind) || "";
+      const fileName = String(s.file_name || s.title || s.url || "");
+      const ext = extOf(fileName);
+      const isAsset =
+        kind === "asset" || ["gif", "png", "jpg", "jpeg", "webp", "svg"].includes(ext);
+
+      if (isAsset) assets.push(s);
+      else primary.push(s);
+    });
+
+    return { primary, assets };
+  }
+
+  function subgroupLabelFor(source) {
+    if (!source) return "OTHER";
+
+    if (source.type === "article" || source.kind === "article") return "ARTICLES";
+
+    const fileName = String(source.file_name || source.title || source.url || "");
+    const ext = extOf(fileName);
+
+    if (source.kind === "asset") {
+      if (ext === "gif") return "HELPFUL GIFS";
+      if (["png", "jpg", "jpeg", "webp", "svg"].includes(ext)) return "IMAGES";
+      return "HELPFUL ASSETS";
+    }
+
+    // docs
+    if (["pdf"].includes(ext)) return "DOCS";
+    if (["doc", "docx", "txt", "md"].includes(ext)) return "DOCS";
+    return "DOCS";
+  }
+
+  function renderGroupedSources(container, grouped, bypassRoleFilter) {
+    const primaryRaw = Array.isArray(grouped.primary) ? grouped.primary : [];
+    const assetsRaw = Array.isArray(grouped.assets) ? grouped.assets : [];
+
+    const primary = bypassRoleFilter ? primaryRaw : filterSourcesByRole(primaryRaw, config.role);
+    const assets = bypassRoleFilter ? assetsRaw : filterSourcesByRole(assetsRaw, config.role);
+
+    if (!primary.length && !assets.length) return;
+
+    const wrap = el("div", { class: "blynk-sources" });
+    wrap.appendChild(el("div", { class: "blynk-sourcesTitle", text: "SOURCES" }));
+
+    function addGroup(titleText, list, colorClass) {
+      if (!list.length) return;
+
+      wrap.appendChild(el("div", { class: "blynk-sourcesGroupTitle", text: titleText }));
+
+      // subgroup by label
+      const buckets = new Map();
+      list.forEach((s) => {
+        const lbl = subgroupLabelFor(s);
+        if (!buckets.has(lbl)) buckets.set(lbl, []);
+        buckets.get(lbl).push(s);
+      });
+
+      for (const [lbl, items] of buckets.entries()) {
+        wrap.appendChild(el("div", { class: "blynk-sourcesSectionTitle", text: lbl }));
+
+        items.slice(0, 6).forEach((s) => {
+          const href = safeLink(s.url);
+          if (!href) return;
+
+          const a = el("a", {
+            class: "blynk-source",
+            href,
+            target: "_blank",
+            rel: "noopener noreferrer",
+          });
+
+          a.textContent = `${sourceIcon(s)} ${s.title || s.file_name || href}`;
+          wrap.appendChild(a);
+        });
+      }
+    }
+
+    addGroup("PRIMARY SOURCES (USED TO ANSWER)", primary, "primary");
+    addGroup("HELPFUL ASSETS (OPTIONAL)", assets, "assets");
+
+    container.appendChild(wrap);
+  }
+
+  // -------------------------
   // Widget
   // -------------------------
   const Agent = {
@@ -655,7 +688,6 @@
     root: null,
     isOpen: false,
     ui: {},
-
     tenant: {
       profile_icon: config.profileIcon || DEFAULT_PROFILE_ICON,
       title: config.title,
@@ -663,7 +695,6 @@
       theme_accent: "",
       theme_launcher: "",
     },
-
     _typingRow: null,
 
     async init() {
@@ -679,7 +710,7 @@
             t.profileIcon ||
             DEFAULT_PROFILE_ICON;
 
-          this.tenant.profile_icon = (icon || "").toString().trim() || DEFAULT_PROFILE_ICON;
+          this.tenant.profile_icon = String(icon || "").trim() || DEFAULT_PROFILE_ICON;
 
           const theme = t.theme || (t.tenant && t.tenant.theme) || {};
           const primary = t.theme_primary || theme.primary || "";
@@ -732,8 +763,8 @@
 
       const head = el("div", { class: "blynk-head" });
       const headerRow = el("div", { class: "blynk-header" });
-      const brand = el("div", { class: "blynk-brand" });
 
+      const brand = el("div", { class: "blynk-brand" });
       const logo = el("div", { class: "blynk-logo", "aria-hidden": "true" });
       const logoImg = el("img", {
         class: "blynk-logoImg",
@@ -759,7 +790,6 @@
       headerRow.appendChild(closeBtn);
 
       const subcopy = el("div", { class: "blynk-subcopy", text: this.config.subcopy });
-
       const chips = el("div", { class: "blynk-chips", "aria-label": "Quick replies" });
 
       const actions = (this.config.quickActions || "")
@@ -788,7 +818,6 @@
       const stage = el("div", { class: "blynk-stage" });
       stage.appendChild(this._msgRow({ role: "ai", text: "Hi! How can I help today?", meta: "Blynky • just now" }));
 
-      // typing row
       const typingRow = el("div", { class: "blynk-row ai" });
       const typingAvatar = el("div", { class: "blynk-avatar ai", "aria-hidden": "true" }, [
         el("img", { alt: "", src: this.tenant.profile_icon || DEFAULT_PROFILE_ICON }),
@@ -804,7 +833,6 @@
       stage.appendChild(typingRow);
       this._typingRow = typingRow;
 
-      // composer
       const composer = el("div", { class: "blynk-composer" });
       const inputWrap = el("div", { class: "blynk-inputWrap" });
       const input = el("input", {
@@ -816,7 +844,6 @@
       inputWrap.appendChild(input);
 
       const sendBtn = el("button", { class: "blynk-send", type: "button", text: "Send" });
-
       sendBtn.addEventListener("click", () => this.handleSend());
       input.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
@@ -851,7 +878,7 @@
       wrap.appendChild(launcher);
       this.root.appendChild(wrap);
 
-      this.ui = { wrap, panel, widget, head, stage, composer, input, sendBtn, launcher };
+      this.ui = { wrap, panel, widget, stage, input, sendBtn, launcher };
       this.close();
     },
 
@@ -887,60 +914,7 @@
       this.ui.input.disabled = isSending;
     },
 
-    _renderSourcesGrouped(grouped) {
-      const container = el("div", { class: "blynk-sources" });
-
-      container.appendChild(el("div", { class: "blynk-sourcesTitle", text: "Sources" }));
-
-      // Primary
-      const primaryTitle = el("div", { class: "blynk-sourcesTitle", text: "Primary Sources (used to answer)" });
-      const primaryWrap = el("div", { class: "blynk-sourcesSection" });
-
-      (grouped.primary || []).slice(0, 5).forEach((s) => {
-        const href = safeLink(s.url);
-        if (!href) return;
-        const a = el("a", {
-          class: "blynk-source",
-          href,
-          target: "_blank",
-          rel: "noopener noreferrer",
-        });
-        a.textContent = `${sourceIcon(s)} ${s.title || href}`;
-        primaryWrap.appendChild(a);
-      });
-
-      // Helpful
-      const helpfulTitle = el("div", { class: "blynk-sourcesTitle", text: "Helpful Assets (optional)" });
-      const helpfulWrap = el("div", { class: "blynk-sourcesSection" });
-
-      (grouped.helpful || []).slice(0, 8).forEach((s) => {
-        const href = safeLink(s.url);
-        if (!href) return;
-        const a = el("a", {
-          class: "blynk-source",
-          href,
-          target: "_blank",
-          rel: "noopener noreferrer",
-        });
-        a.textContent = `${sourceIcon(s)} ${s.title || href}`;
-        helpfulWrap.appendChild(a);
-      });
-
-      // Only show sections if they have items
-      if (primaryWrap.children.length) {
-        container.appendChild(primaryTitle);
-        container.appendChild(primaryWrap);
-      }
-
-      if (helpfulWrap.children.length) {
-        container.appendChild(helpfulTitle);
-        container.appendChild(helpfulWrap);
-      }
-
-      return container;
-    },
-
-    _msgRow({ role, text, meta, sourcesGrouped, kind }) {
+    _msgRow({ role, text, meta, sourcesData }) {
       const row = el("div", { class: `blynk-row ${role}` });
 
       const av = el("div", { class: `blynk-avatar ${role}`, "aria-hidden": "true" });
@@ -949,20 +923,12 @@
       }
 
       const wrap = el("div");
-      const bubble = el("div", { class: `blynk-bubble ${role} ${kind || ""} blynk-enter` });
+      const bubble = el("div", { class: `blynk-bubble ${role} blynk-enter` });
+      bubble.textContent = text;
 
-      if (kind === "kb") {
-        const title = el("div", { class: "blynk-kbTitle", text: "KB Summary" });
-        const body = el("div", { class: "blynk-kbText" });
-        body.textContent = text;
-        bubble.appendChild(title);
-        bubble.appendChild(body);
-      } else {
-        bubble.textContent = text;
-      }
-
-      if (sourcesGrouped && (sourcesGrouped.primary?.length || sourcesGrouped.helpful?.length)) {
-        bubble.appendChild(this._renderSourcesGrouped(sourcesGrouped));
+      // Grouped sources renderer
+      if (sourcesData) {
+        renderGroupedSources(bubble, sourcesData.grouped, sourcesData.bypassRoleFilter);
       }
 
       const m = el("div", { class: `blynk-meta ${role}`, text: meta });
@@ -981,16 +947,10 @@
       return row;
     },
 
-    appendMessage(role, text, sourcesGrouped, kind) {
-      const meta =
-        kind === "kb"
-          ? "KB Summary • now"
-          : role === "user"
-          ? "You • now"
-          : "Blynky • now";
-
+    appendMessage(role, text, sourcesData) {
+      const meta = role === "user" ? "You • now" : "Blynky • now";
       this.ui.stage.insertBefore(
-        this._msgRow({ role, text, meta, sourcesGrouped, kind }),
+        this._msgRow({ role, text, meta, sourcesData }),
         this._typingRow || null
       );
       this.scrollToBottom();
@@ -1042,19 +1002,14 @@
 
         const bypassRoleFilter = Boolean(data && (data.disableRoleFilter || data.disable_role_filter));
 
-        const grouped = groupSourcesFromResponse(data, this.config.role, bypassRoleFilter);
-
-        const kbSummary =
-          (data && (data.kb_summary || data.kbSummary || data.summary || data.kbSummaryText)) || "";
+        // Normalize grouped sources from new or old response shapes
+        const grouped = normalizeGroupedSources(data);
 
         this.setTyping(false);
 
-        if (kbSummary && String(kbSummary).trim()) {
-          this.appendMessage("ai", String(kbSummary).trim(), null, "kb");
-        }
+        const answer = String((data && data.answer) || "No answer returned.").trim();
 
-        const answer = (data?.answer || "No answer returned.").toString();
-        this.appendMessage("ai", answer, grouped);
+        this.appendMessage("ai", answer, { grouped, bypassRoleFilter });
       } catch (err) {
         this.setTyping(false);
         this.appendMessage("ai", "Sorry — something went wrong. Please try again.");
