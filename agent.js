@@ -6,11 +6,15 @@
    - Tenant avatar via tenants.profile_icon (fallback default)
    - Tenant theme colors via update_tenant_settings GET:
        { theme: { primary, accent, launcher } }
-   - NEW: Primary Sources + Helpful Assets grouping
-     Looks for:
-       data.primary_sources (preferred)
-       data.helpful_assets (optional)
-       data.sources (legacy fallback)
+
+   NEW (Source Grouping):
+   - Renders:
+     Primary Sources (used to answer)
+       - Articles
+       - Docs
+     Helpful Assets (optional)
+       - Helpful GIFs
+       - Images
 ===================================================== */
 
 (function () {
@@ -59,7 +63,6 @@
     adminToken: scriptEl.getAttribute("data-admin-token") || "",
 
     // Optional: point directly to settings function
-    // e.g. https://PROJECT.supabase.co/functions/v1/update_tenant_settings
     settingsUrl: scriptEl.getAttribute("data-settings-url") || "",
 
     // Optional UI quick actions (pipe-separated labels)
@@ -138,29 +141,34 @@
     }
   }
 
-  // ✅ Source icons
+  function extFromName(name) {
+    const n = String(name || "").toLowerCase().trim();
+    const idx = n.lastIndexOf(".");
+    if (idx === -1) return "";
+    return n.slice(idx + 1);
+  }
+
+  function kindFromSource(s) {
+    if (s && s.type === "article") return "article";
+    const nm = String((s && (s.file_name || s.title)) || "").toLowerCase();
+    const ext = extFromName(nm);
+    if (ext === "gif") return "gif";
+    if (["png", "jpg", "jpeg", "webp", "bmp", "svg"].includes(ext)) return "image";
+    if (["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "csv"].includes(ext)) return "doc";
+    return "other";
+  }
+
+  // ✅ Source icons for links
   function sourceIcon(source) {
-    if (source && source.type === "article") return "📘";
-
-    const provider = ((source && source.provider) || "").toString().toLowerCase();
-    if (provider.includes("google")) return "🟦";
-    if (provider.includes("dropbox")) return "🟪";
-    if (provider.includes("webflow")) return "🧩";
-
-    const name = ((source && source.file_name) || (source && source.title) || "")
-      .toString()
-      .toLowerCase();
-
-    if (name.endsWith(".pdf")) return "📄";
-    if (name.endsWith(".gif")) return "🎞️";
-    if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg")) return "🖼️";
-    if (name.endsWith(".doc") || name.endsWith(".docx")) return "📝";
-    if (name.endsWith(".xls") || name.endsWith(".xlsx") || name.endsWith(".csv")) return "📊";
-
+    const k = kindFromSource(source);
+    if (k === "article") return "📘";
+    if (k === "doc") return "📄";
+    if (k === "gif") return "🎞️";
+    if (k === "image") return "🖼️";
     return "📎";
   }
 
-  // UI-only role filtering (used only when backend is enforcing RBAC)
+  // UI-only source filtering (used only when backend is enforcing RBAC)
   function filterSourcesByRole(sources, role) {
     if (!Array.isArray(sources)) return [];
     if (role === "admin") return sources;
@@ -174,95 +182,22 @@
     });
   }
 
-  // -------------------------
-  // Source grouping helpers
-  // -------------------------
-  function normalizeSource(s) {
-    if (!s) return null;
-    const type = (s.type || "").toString().toLowerCase();
-    const provider = s.provider ? String(s.provider).toLowerCase() : null;
-
-    return {
-      type: type === "article" ? "article" : "file",
-      provider,
-      title: (s.title || s.file_name || "Source").toString(),
-      url: (s.url || "").toString(),
-      slug: s.slug ? String(s.slug) : null,
-      audience_role: (s.audience_role || s.audienceRole || "user").toString().toLowerCase(),
-      file_name: (s.file_name || "").toString(),
-      similarity: typeof s.similarity === "number" ? s.similarity : null,
-      mime_type: s.mime_type ? String(s.mime_type).toLowerCase() : null,
+  function groupSources(flatSources) {
+    const out = {
+      primary: { articles: [], docs: [] },
+      helpful: { gifs: [], images: [], other: [] },
     };
-  }
 
-  function isGifLike(s) {
-    const mt = (s.mime_type || "").toLowerCase();
-    const name = (s.file_name || s.title || "").toLowerCase();
-    return mt === "image/gif" || name.endsWith(".gif");
-  }
-
-  function isImageLike(s) {
-    const mt = (s.mime_type || "").toLowerCase();
-    if (mt.startsWith("image/")) return true;
-    const name = (s.file_name || s.title || "").toLowerCase();
-    return (
-      name.endsWith(".png") ||
-      name.endsWith(".jpg") ||
-      name.endsWith(".jpeg") ||
-      name.endsWith(".webp") ||
-      name.endsWith(".gif")
-    );
-  }
-
-  function dedupeByUrl(arr) {
-    const seen = new Set();
-    return (arr || []).filter((x) => {
-      const u = (x && x.url) || "";
-      if (!u) return false;
-      if (seen.has(u)) return false;
-      seen.add(u);
-      return true;
+    (flatSources || []).forEach((s) => {
+      const k = kindFromSource(s);
+      if (k === "article") out.primary.articles.push(s);
+      else if (k === "doc") out.primary.docs.push(s);
+      else if (k === "gif") out.helpful.gifs.push(s);
+      else if (k === "image") out.helpful.images.push(s);
+      else out.helpful.other.push(s);
     });
-  }
 
-  // Returns a list of groups: [{ title, items }]
-  function buildSourceGroups(primarySources, helpfulAssets) {
-    const p = dedupeByUrl((primarySources || []).map(normalizeSource).filter(Boolean));
-    const h = dedupeByUrl((helpfulAssets || []).map(normalizeSource).filter(Boolean));
-
-    const groups = [];
-
-    // Primary: Articles
-    const primaryArticles = p.filter((s) => s.type === "article");
-    if (primaryArticles.length) {
-      groups.push({ title: "Articles", items: primaryArticles });
-    }
-
-    // Primary: Docs (non-image files)
-    const primaryDocs = p.filter((s) => s.type === "file" && !isImageLike(s));
-    if (primaryDocs.length) {
-      groups.push({ title: "Docs", items: primaryDocs });
-    }
-
-    // Primary: Helpful GIFs (if they happened to be in primary)
-    const primaryGifs = p.filter((s) => s.type === "file" && isGifLike(s));
-    if (primaryGifs.length) {
-      // keep them separate if you want
-      groups.push({ title: "Helpful GIFs", items: primaryGifs });
-    }
-
-    // Helpful assets: Prefer GIFs first
-    const helpfulGifs = h.filter((s) => isGifLike(s));
-    const helpfulImages = h.filter((s) => isImageLike(s) && !isGifLike(s));
-
-    if (helpfulGifs.length) {
-      groups.push({ title: "Helpful GIFs", items: helpfulGifs });
-    }
-    if (helpfulImages.length) {
-      groups.push({ title: "Helpful Images", items: helpfulImages });
-    }
-
-    return groups;
+    return out;
   }
 
   // -------------------------
@@ -289,6 +224,7 @@
     if (config.settingsUrl) candidates.push(config.settingsUrl);
 
     if (apiBase) {
+      candidates.push(`${apiBase}/get_tenant_settings`);
       candidates.push(`${apiBase}/update_tenant_settings`); // your GET handler returns settings
     }
 
@@ -353,12 +289,10 @@
   position:fixed; bottom:24px; right:24px; z-index:999999;
   display:flex; flex-direction:column; gap:10px; align-items:flex-end;
 
-  /* theme defaults live here (launcher is outside widget) */
   --blynk-primary: ${config.accentMint || "#6ecace"};
   --blynk-accent: ${config.accentCoral || "#ed5b4e"};
   --blynk-launcher: ${config.accentMint || "#6ecace"};
 
-  /* rgb fallbacks */
   --blynk-primary-rgb: 110, 202, 206;
   --blynk-accent-rgb: 237, 91, 78;
   --blynk-launcher-rgb: 110, 202, 206;
@@ -384,7 +318,6 @@
 
 /* ---- Widget vars (scoped) ---- */
 #${ROOT_ID} .blynk-widget{
-  /* inherit theme from wrap unless overridden */
   --blynk-primary: var(--blynk-primary);
   --blynk-accent: var(--blynk-accent);
 
@@ -607,7 +540,7 @@
 #${ROOT_ID} .blynk-meta.ai{margin-left:40px}
 #${ROOT_ID} .blynk-meta.user{text-align:right; margin-right:40px}
 
-/* typing */
+/* Typing */
 #${ROOT_ID} .blynk-typing{
   display:inline-flex;
   gap:6px;
@@ -630,26 +563,29 @@
   40%{transform: translateY(-4px); opacity:.85}
 }
 
-/* Sources (links) */
+/* Sources (grouped) */
 #${ROOT_ID} .blynk-sources{
   margin-top:10px;
   padding-top:10px;
   border-top: 1px solid rgba(80,77,97,.10);
   display:flex;
   flex-direction:column;
-  gap:10px;
+  gap:8px;
 }
 #${ROOT_ID} .blynk-sourcesTitle{
   font-size:12px;
   font-weight:850;
   letter-spacing:.02em;
-  color: rgba(80,77,97,.62);
+  color: rgba(80,77,97,.78);
   text-transform: uppercase;
 }
-#${ROOT_ID} .blynk-sourcesGroup{
-  display:flex;
-  flex-direction:column;
-  gap:6px;
+#${ROOT_ID} .blynk-groupTitle{
+  font-size:11px;
+  font-weight:850;
+  letter-spacing:.02em;
+  color: rgba(80,77,97,.62);
+  text-transform: uppercase;
+  margin-top:2px;
 }
 #${ROOT_ID} .blynk-source{
   font-size:12px;
@@ -974,42 +910,49 @@
       this.ui.input.disabled = isSending;
     },
 
-    _renderSources(groups, bypassRoleFilter) {
-      const wrap = el("div", { class: "blynk-sources" });
-      wrap.appendChild(el("div", { class: "blynk-sourcesTitle", text: "Sources" }));
+    _renderGroupedSources(container, grouped) {
+      // grouped: { primarySources: [], helpfulAssets: [] } OR built from flat array
+      const flatPrimary = Array.isArray(grouped?.primarySources) ? grouped.primarySources : [];
+      const flatHelpful = Array.isArray(grouped?.helpfulAssets) ? grouped.helpfulAssets : [];
 
-      const maxPerGroup = 5;
+      const gPrimary = groupSources(flatPrimary);
+      const gHelpful = groupSources(flatHelpful);
 
-      (groups || []).forEach((g) => {
-        if (!g || !Array.isArray(g.items) || !g.items.length) return;
-
-        const groupEl = el("div", { class: "blynk-sourcesGroup" });
-        groupEl.appendChild(el("div", { class: "blynk-sourcesTitle", text: g.title }));
-
-        g.items.slice(0, maxPerGroup).forEach((s) => {
+      const addSection = (title, items) => {
+        if (!Array.isArray(items) || items.length === 0) return;
+        container.appendChild(el("div", { class: "blynk-groupTitle", text: title }));
+        items.slice(0, 6).forEach((s) => {
           const href = safeLink(s.url);
           if (!href) return;
-
-          // if backend says "bypass", we can show everything; otherwise filter already done before calling
           const a = el("a", {
             class: "blynk-source",
             href,
             target: "_blank",
             rel: "noopener noreferrer",
           });
-
-          const icon = sourceIcon(s);
-          a.textContent = `${icon} ${s.title || href}`;
-          groupEl.appendChild(a);
+          a.textContent = `${sourceIcon(s)} ${s.title || s.file_name || href}`;
+          container.appendChild(a);
         });
+      };
 
-        wrap.appendChild(groupEl);
-      });
+      // Primary
+      container.appendChild(el("div", { class: "blynk-sourcesTitle", text: "Sources" }));
+      if (flatPrimary.length) {
+        container.appendChild(el("div", { class: "blynk-groupTitle", text: "Primary Sources (used to answer)" }));
+        addSection("Articles", gPrimary.primary.articles);
+        addSection("Docs", gPrimary.primary.docs);
+      }
 
-      return wrap;
+      // Helpful Assets
+      if (flatHelpful.length) {
+        container.appendChild(el("div", { class: "blynk-groupTitle", text: "Helpful Assets (optional)" }));
+        addSection("Helpful GIFs", gHelpful.helpful.gifs);
+        addSection("Images", gHelpful.helpful.images);
+        addSection("Other", gHelpful.helpful.other);
+      }
     },
 
-    _msgRow({ role, text, meta, sourcesGroups, bypassRoleFilter }) {
+    _msgRow({ role, text, meta, sourcesPayload }) {
       const row = el("div", { class: `blynk-row ${role}` });
 
       const av = el("div", { class: `blynk-avatar ${role}`, "aria-hidden": "true" });
@@ -1018,12 +961,14 @@
       }
 
       const wrap = el("div");
-
       const bubble = el("div", { class: `blynk-bubble ${role} blynk-enter` });
       bubble.textContent = text;
 
-      if (Array.isArray(sourcesGroups) && sourcesGroups.length) {
-        bubble.appendChild(this._renderSources(sourcesGroups, bypassRoleFilter));
+      // sources rendering (grouped)
+      if (sourcesPayload) {
+        const sourcesEl = el("div", { class: "blynk-sources" });
+        this._renderGroupedSources(sourcesEl, sourcesPayload);
+        bubble.appendChild(sourcesEl);
       }
 
       const m = el("div", { class: `blynk-meta ${role}`, text: meta });
@@ -1042,11 +987,11 @@
       return row;
     },
 
-    appendMessage(role, text, sourcesGroups, bypassRoleFilter) {
+    appendMessage(role, text, sourcesPayload) {
       const meta = role === "user" ? "You • now" : "Blynky • now";
 
       this.ui.stage.insertBefore(
-        this._msgRow({ role, text, meta, sourcesGroups, bypassRoleFilter }),
+        this._msgRow({ role, text, meta, sourcesPayload }),
         this._typingRow || null
       );
       this.scrollToBottom();
@@ -1096,37 +1041,35 @@
 
         const data = await res.json();
 
-        // Backend-driven role-filter bypass (demo mode)
         const bypassRoleFilter = Boolean(data && (data.disableRoleFilter || data.disable_role_filter));
 
-        // NEW preferred shape
-        const primarySourcesRaw = Array.isArray(data?.primary_sources) ? data.primary_sources : [];
-        const helpfulAssetsRaw = Array.isArray(data?.helpful_assets) ? data.helpful_assets : [];
+        // Prefer new grouped payload from backend
+        const sg = data && data.source_groups ? data.source_groups : null;
 
-        // Legacy fallback
-        const legacySourcesRaw = Array.isArray(data?.sources) ? data.sources : [];
+        // Back-compat: if only flat sources exist, we group client-side
+        const allSources = Array.isArray(data?.sources) ? data.sources : [];
+        const visibleFlat = bypassRoleFilter ? allSources : filterSourcesByRole(allSources, this.config.role);
 
-        // Role filtering (only when backend isn't bypassing)
-        const primarySources = bypassRoleFilter
-          ? primarySourcesRaw
-          : filterSourcesByRole(primarySourcesRaw, this.config.role);
+        const sourcesPayload = sg
+          ? {
+              primarySources: bypassRoleFilter
+                ? (Array.isArray(sg.primarySources) ? sg.primarySources : [])
+                : filterSourcesByRole(sg.primarySources || [], this.config.role),
+              helpfulAssets: bypassRoleFilter
+                ? (Array.isArray(sg.helpfulAssets) ? sg.helpfulAssets : [])
+                : filterSourcesByRole(sg.helpfulAssets || [], this.config.role),
+            }
+          : {
+              // fallback grouping if server didn't send grouped blocks
+              primarySources: visibleFlat.filter((s) => ["article", "file"].includes((s.type || "").toLowerCase())),
+              helpfulAssets: [],
+            };
 
-        const helpfulAssets = bypassRoleFilter
-          ? helpfulAssetsRaw
-          : filterSourcesByRole(helpfulAssetsRaw, this.config.role);
-
-        // If backend hasn't upgraded yet, use legacy as "primary"
-        const primaryFallback = primarySources.length ? primarySources : legacySourcesRaw;
-        const primaryFinal = bypassRoleFilter
-          ? primaryFallback
-          : filterSourcesByRole(primaryFallback, this.config.role);
-
-        const sourceGroups = buildSourceGroups(primaryFinal, helpfulAssets);
-
+        // Hide typing before we show answer
         this.setTyping(false);
 
         const answer = (data?.answer || "No answer returned.").toString();
-        this.appendMessage("ai", answer, sourceGroups, bypassRoleFilter);
+        this.appendMessage("ai", answer, sourcesPayload);
       } catch (err) {
         this.setTyping(false);
         this.appendMessage("ai", "Sorry — something went wrong. Please try again.");
