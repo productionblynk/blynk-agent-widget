@@ -224,7 +224,6 @@
     if (config.settingsUrl) candidates.push(config.settingsUrl);
 
     if (apiBase) {
-      candidates.push(`${apiBase}/get_tenant_settings`);
       candidates.push(`${apiBase}/update_tenant_settings`); // your GET handler returns settings
     }
 
