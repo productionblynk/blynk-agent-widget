@@ -1,7 +1,11 @@
 /* =====================================================
-   B-lynk Agent Widget — Grouped Sources UI
-   - Primary Sources (used to answer) vs Helpful Assets (optional)
-   - Keeps your frosty UI + tenant theme/profile
+   B-lynk Agent Widget — Grouped Sources UI (Articles / Docs / Media)
+   - Frosty UI + tenant theme/profile
+   - Supports ask response shapes:
+       1) sources_grouped: { articles, docs, media }   (preferred)
+       2) sources (array)                              (back-compat)
+       3) sources_flat (array)                         (older)
+       4) sources: { primary, assets }                 (older grouped)
 ===================================================== */
 
 (function () {
@@ -85,6 +89,14 @@
     return m ? m[1] : "";
   }
 
+  function isMediaExt(ext) {
+    return (
+      ext === "gif" ||
+      ["png", "jpg", "jpeg", "webp", "svg", "bmp", "tiff"].includes(ext) ||
+      ["mp4", "mov", "webm", "m4v"].includes(ext)
+    );
+  }
+
   // -------------------------
   // Color helpers
   // -------------------------
@@ -135,14 +147,15 @@
 
     if (ext === "pdf") return "📄";
     if (ext === "gif") return "🎞️";
-    if (["png", "jpg", "jpeg", "webp", "svg"].includes(ext)) return "🖼️";
+    if (["mp4", "mov", "webm", "m4v"].includes(ext)) return "🎬";
+    if (["png", "jpg", "jpeg", "webp", "svg", "bmp", "tiff"].includes(ext)) return "🖼️";
     if (["doc", "docx"].includes(ext)) return "📝";
     if (["xls", "xlsx"].includes(ext)) return "📊";
 
     return "📎";
   }
 
-  // UI-only source filtering (used only when backend is enforcing RBAC)
+  // UI-only source filtering (belt + suspenders)
   function filterSourcesByRole(list, role) {
     if (!Array.isArray(list)) return [];
     if (role === "admin") return list;
@@ -160,7 +173,6 @@
     try {
       const u = new URL(askUrl);
       const parts = u.pathname.split("/").filter(Boolean);
-      // expects ["functions","v1","ask"]
       if (parts.length >= 2) u.pathname = "/" + parts.slice(0, 2).join("/");
       u.search = "";
       u.hash = "";
@@ -174,14 +186,8 @@
     const apiBase = apiBaseFromAskUrl(config.apiUrl);
     const candidates = [];
 
-    // Prefer explicit
     if (config.settingsUrl) candidates.push(config.settingsUrl);
-
-    // Prefer update_tenant_settings GET (your function supports GET)
     if (apiBase) candidates.push(`${apiBase}/update_tenant_settings`);
-
-    // NOTE: we intentionally do NOT try get_tenant_settings anymore
-    // because your console showed it failing preflight sometimes.
 
     for (const baseUrl of candidates) {
       try {
@@ -195,7 +201,6 @@
         });
 
         if (!res.ok) continue;
-
         const data = await res.json().catch(() => null);
         if (data && (data.ok === true || data.tenantId || data.id)) return data;
       } catch (_e) {}
@@ -488,14 +493,6 @@
   color: rgba(80,77,97,.72);
   text-transform: uppercase;
 }
-#${ROOT_ID} .blynk-sourcesSectionTitle{
-  font-size:11px;
-  font-weight:900;
-  letter-spacing:.02em;
-  color: rgba(80,77,97,.55);
-  text-transform: uppercase;
-  margin-top:4px;
-}
 #${ROOT_ID} .blynk-sourcesGroupTitle{
   font-size:11px;
   font-weight:900;
@@ -576,106 +573,110 @@
   }
 
   // -------------------------
-  // Source grouping for UI
+  // Grouped sources normalization (Articles / Docs / Media)
   // -------------------------
-  function normalizeGroupedSources(data) {
-    // New format
+  function normalizeSourcesToADM(data) {
+    // 1) Preferred: sources_grouped
+    if (data && data.sources_grouped && typeof data.sources_grouped === "object") {
+      const sg = data.sources_grouped;
+      const articles = Array.isArray(sg.articles) ? sg.articles : [];
+      const docs = Array.isArray(sg.docs) ? sg.docs : [];
+      const media = Array.isArray(sg.media) ? sg.media : [];
+      return { articles, docs, media };
+    }
+
+    // 2) Older grouped: sources: { primary, assets }
     if (data && data.sources && typeof data.sources === "object" && !Array.isArray(data.sources)) {
       const primary = Array.isArray(data.sources.primary) ? data.sources.primary : [];
       const assets = Array.isArray(data.sources.assets) ? data.sources.assets : [];
-      return { primary, assets };
+
+      const articles = primary.filter((s) => s && (s.type === "article" || s.kind === "article"));
+      const docs = primary.filter((s) => !(s && (s.type === "article" || s.kind === "article")));
+      const media = assets;
+
+      return { articles, docs, media };
     }
 
-    // Back-compat
+    // 3) Flat: sources_flat OR sources (array)
     const flat =
       (data && Array.isArray(data.sources_flat) && data.sources_flat) ||
       (data && Array.isArray(data.sources) && data.sources) ||
       [];
 
-    // Try to split using kind/asset_type/ext
-    const primary = [];
-    const assets = [];
+    const articles = [];
+    const docs = [];
+    const media = [];
+
     flat.forEach((s) => {
-      const kind = (s && s.kind) || "";
+      if (!s) return;
+
+      const isArticle = s.type === "article" || s.kind === "article";
+      if (isArticle) {
+        articles.push(s);
+        return;
+      }
+
+      // file-based -> decide media vs doc
       const fileName = String(s.file_name || s.title || s.url || "");
       const ext = extOf(fileName);
-      const isAsset =
-        kind === "asset" || ["gif", "png", "jpg", "jpeg", "webp", "svg"].includes(ext);
+      const isMedia = (s.kind === "media") || (s.asset_type && s.asset_type !== null) || isMediaExt(ext);
 
-      if (isAsset) assets.push(s);
-      else primary.push(s);
+      if (isMedia) media.push(s);
+      else docs.push(s);
     });
 
-    return { primary, assets };
+    return { articles, docs, media };
   }
 
-  function subgroupLabelFor(source) {
-    if (!source) return "OTHER";
+  function renderSourcesADM(container, adm, bypassRoleFilter) {
+    const rawArticles = Array.isArray(adm.articles) ? adm.articles : [];
+    const rawDocs = Array.isArray(adm.docs) ? adm.docs : [];
+    const rawMedia = Array.isArray(adm.media) ? adm.media : [];
 
-    if (source.type === "article" || source.kind === "article") return "ARTICLES";
+    const articles = bypassRoleFilter ? rawArticles : filterSourcesByRole(rawArticles, config.role);
+    const docs = bypassRoleFilter ? rawDocs : filterSourcesByRole(rawDocs, config.role);
+    const media = bypassRoleFilter ? rawMedia : filterSourcesByRole(rawMedia, config.role);
 
-    const fileName = String(source.file_name || source.title || source.url || "");
-    const ext = extOf(fileName);
-
-    if (source.kind === "asset") {
-      if (ext === "gif") return "HELPFUL GIFS";
-      if (["png", "jpg", "jpeg", "webp", "svg"].includes(ext)) return "IMAGES";
-      return "HELPFUL ASSETS";
-    }
-
-    // docs
-    if (["pdf"].includes(ext)) return "DOCS";
-    if (["doc", "docx", "txt", "md"].includes(ext)) return "DOCS";
-    return "DOCS";
-  }
-
-  function renderGroupedSources(container, grouped, bypassRoleFilter) {
-    const primaryRaw = Array.isArray(grouped.primary) ? grouped.primary : [];
-    const assetsRaw = Array.isArray(grouped.assets) ? grouped.assets : [];
-
-    const primary = bypassRoleFilter ? primaryRaw : filterSourcesByRole(primaryRaw, config.role);
-    const assets = bypassRoleFilter ? assetsRaw : filterSourcesByRole(assetsRaw, config.role);
-
-    if (!primary.length && !assets.length) return;
+    if (!articles.length && !docs.length && !media.length) return;
 
     const wrap = el("div", { class: "blynk-sources" });
     wrap.appendChild(el("div", { class: "blynk-sourcesTitle", text: "SOURCES" }));
 
-    function addGroup(titleText, list, colorClass) {
+    function addGroup(titleText, list) {
       if (!list.length) return;
 
       wrap.appendChild(el("div", { class: "blynk-sourcesGroupTitle", text: titleText }));
 
-      // subgroup by label
-      const buckets = new Map();
+      // de-dupe by URL (prevents “same doc 3 times” in UI even if backend returns dupes)
+      const seen = new Set();
+      const uniq = [];
       list.forEach((s) => {
-        const lbl = subgroupLabelFor(s);
-        if (!buckets.has(lbl)) buckets.set(lbl, []);
-        buckets.get(lbl).push(s);
+        const href = safeLink(s && s.url);
+        const key = href || `${s.type || ""}|${s.title || ""}|${s.file_name || ""}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        uniq.push(s);
       });
 
-      for (const [lbl, items] of buckets.entries()) {
-        wrap.appendChild(el("div", { class: "blynk-sourcesSectionTitle", text: lbl }));
+      uniq.slice(0, 7).forEach((s) => {
+        const href = safeLink(s.url);
+        if (!href) return;
 
-        items.slice(0, 6).forEach((s) => {
-          const href = safeLink(s.url);
-          if (!href) return;
-
-          const a = el("a", {
-            class: "blynk-source",
-            href,
-            target: "_blank",
-            rel: "noopener noreferrer",
-          });
-
-          a.textContent = `${sourceIcon(s)} ${s.title || s.file_name || href}`;
-          wrap.appendChild(a);
+        const a = el("a", {
+          class: "blynk-source",
+          href,
+          target: "_blank",
+          rel: "noopener noreferrer",
         });
-      }
+
+        a.textContent = `${sourceIcon(s)} ${s.title || s.file_name || href}`;
+        wrap.appendChild(a);
+      });
     }
 
-    addGroup("PRIMARY SOURCES (USED TO ANSWER)", primary, "primary");
-    addGroup("HELPFUL ASSETS (OPTIONAL)", assets, "assets");
+    addGroup("ARTICLES", articles);
+    addGroup("DOCS", docs);
+    addGroup("MEDIA", media);
 
     container.appendChild(wrap);
   }
@@ -926,9 +927,8 @@
       const bubble = el("div", { class: `blynk-bubble ${role} blynk-enter` });
       bubble.textContent = text;
 
-      // Grouped sources renderer
-      if (sourcesData) {
-        renderGroupedSources(bubble, sourcesData.grouped, sourcesData.bypassRoleFilter);
+      if (sourcesData && sourcesData.adm) {
+        renderSourcesADM(bubble, sourcesData.adm, sourcesData.bypassRoleFilter);
       }
 
       const m = el("div", { class: `blynk-meta ${role}`, text: meta });
@@ -1000,16 +1000,17 @@
 
         const data = await res.json();
 
-        const bypassRoleFilter = Boolean(data && (data.disableRoleFilter || data.disable_role_filter));
+        const bypassRoleFilter = Boolean(
+          data && (data.disableRoleFilter || data.disable_role_filter)
+        );
 
-        // Normalize grouped sources from new or old response shapes
-        const grouped = normalizeGroupedSources(data);
+        // Normalize to Articles / Docs / Media
+        const adm = normalizeSourcesToADM(data);
 
         this.setTyping(false);
 
         const answer = String((data && data.answer) || "No answer returned.").trim();
-
-        this.appendMessage("ai", answer, { grouped, bypassRoleFilter });
+        this.appendMessage("ai", answer, { adm, bypassRoleFilter });
       } catch (err) {
         this.setTyping(false);
         this.appendMessage("ai", "Sorry — something went wrong. Please try again.");
