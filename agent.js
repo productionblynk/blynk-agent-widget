@@ -98,6 +98,19 @@
   }
 
   // -------------------------
+  // Debug intent helpers
+  // -------------------------
+  function prettyIntent(intent) {
+    const v = String(intent || "").toLowerCase().trim();
+    if (!v) return "";
+    if (v === "media_request") return "MEDIA REQUEST";
+    if (v === "how_to") return "HOW TO";
+    if (v === "small_talk") return "SMALL TALK";
+    if (v === "generic") return "GENERIC";
+    return v.toUpperCase();
+  }
+
+  // -------------------------
   // Color helpers
   // -------------------------
   function hexToRgb(hex) {
@@ -148,7 +161,8 @@
     if (ext === "pdf") return "📄";
     if (ext === "gif") return "🎞️";
     if (["mp4", "mov", "webm", "m4v"].includes(ext)) return "🎬";
-    if (["png", "jpg", "jpeg", "webp", "svg", "bmp", "tiff"].includes(ext)) return "🖼️";
+    if (["png", "jpg", "jpeg", "webp", "svg", "bmp", "tiff"].includes(ext))
+      return "🖼️";
     if (["doc", "docx"].includes(ext)) return "📝";
     if (["xls", "xlsx"].includes(ext)) return "📊";
 
@@ -161,7 +175,9 @@
     if (role === "admin") return list;
 
     return list.filter((s) => {
-      const ar = String(s.audience_role || s.audienceRole || "user").toLowerCase().trim();
+      const ar = String(s.audience_role || s.audienceRole || "user")
+        .toLowerCase()
+        .trim();
       return ar === "user";
     });
   }
@@ -441,6 +457,23 @@
   border-color: rgba(80, 77, 97, 0.4);
 }
 
+/* ✅ Debug intent pill */
+#${ROOT_ID} .blynk-intent{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  font-size:11px;
+  font-weight:850;
+  letter-spacing:.02em;
+  text-transform:uppercase;
+  padding:5px 9px;
+  border-radius:999px;
+  border:1px solid rgba(var(--blynk-primary-rgb), .22);
+  background: rgba(255,255,255,.52);
+  color: rgba(80,77,97,.78);
+  margin-bottom:8px;
+}
+
 #${ROOT_ID} .blynk-enter{animation: blynkPopIn 380ms var(--ease-soft) both}
 @keyframes blynkPopIn{
   from{transform: translateY(10px) scale(.98); opacity:0}
@@ -454,28 +487,6 @@
 }
 #${ROOT_ID} .blynk-meta.ai{margin-left:40px}
 #${ROOT_ID} .blynk-meta.user{text-align:right; margin-right:40px}
-
-#${ROOT_ID} .blynk-typing{
-  display:inline-flex;
-  gap:6px;
-  align-items:center;
-  padding:10px 12px;
-  border-radius:999px;
-  border:1px solid rgba(80,77,97,.10);
-  background: rgba(255,255,255,.60);
-  box-shadow: 0 18px 55px var(--shadow);
-}
-#${ROOT_ID} .blynk-dot{
-  width:6px; height:6px; border-radius:999px;
-  background: rgba(80,77,97,.55);
-  animation: blynkBounce 900ms infinite;
-}
-#${ROOT_ID} .blynk-dot:nth-child(2){animation-delay:120ms}
-#${ROOT_ID} .blynk-dot:nth-child(3){animation-delay:240ms}
-@keyframes blynkBounce{
-  0%, 80%, 100%{transform: translateY(0); opacity:.45}
-  40%{transform: translateY(-4px); opacity:.85}
-}
 
 /* Sources block */
 #${ROOT_ID} .blynk-sources{
@@ -616,7 +627,6 @@
         return;
       }
 
-      // file-based -> decide media vs doc
       const fileName = String(s.file_name || s.title || s.url || "");
       const ext = extOf(fileName);
       const isMedia = (s.kind === "media") || (s.asset_type && s.asset_type !== null) || isMediaExt(ext);
@@ -647,7 +657,6 @@
 
       wrap.appendChild(el("div", { class: "blynk-sourcesGroupTitle", text: titleText }));
 
-      // de-dupe by URL (prevents “same doc 3 times” in UI even if backend returns dupes)
       const seen = new Set();
       const uniq = [];
       list.forEach((s) => {
@@ -925,13 +934,30 @@
 
       const wrap = el("div");
       const bubble = el("div", { class: `blynk-bubble ${role} blynk-enter` });
-      bubble.textContent = text;
+
+      // ✅ Debug-only intent pill (only for AI messages)
+      if (role === "ai" && config.debug && sourcesData && sourcesData.intent) {
+        const label = prettyIntent(sourcesData.intent);
+        if (label) {
+          bubble.appendChild(el("div", { class: "blynk-intent", text: label }));
+        }
+      }
+
+      const textNode = document.createElement("div");
+      textNode.textContent = text;
+      bubble.appendChild(textNode);
 
       if (sourcesData && sourcesData.adm) {
         renderSourcesADM(bubble, sourcesData.adm, sourcesData.bypassRoleFilter);
       }
 
       const m = el("div", { class: `blynk-meta ${role}`, text: meta });
+
+      // ✅ Debug-only meta suffix
+      if (role === "ai" && config.debug && sourcesData && sourcesData.intent) {
+        const label = String(sourcesData.intent || "").trim();
+        if (label) m.textContent = `${meta} • intent: ${label}`;
+      }
 
       wrap.appendChild(bubble);
       wrap.appendChild(m);
@@ -1007,10 +1033,17 @@
         // Normalize to Articles / Docs / Media
         const adm = normalizeSourcesToADM(data);
 
+        // ✅ pull intent from backend response
+        const intent = data && data.intent ? String(data.intent) : "";
+
+        if (config.debug) {
+          log("Ask response intent:", intent || "(none)", data);
+        }
+
         this.setTyping(false);
 
         const answer = String((data && data.answer) || "No answer returned.").trim();
-        this.appendMessage("ai", answer, { adm, bypassRoleFilter });
+        this.appendMessage("ai", answer, { adm, bypassRoleFilter, intent });
       } catch (err) {
         this.setTyping(false);
         this.appendMessage("ai", "Sorry — something went wrong. Please try again.");
