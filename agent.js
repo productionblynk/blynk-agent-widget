@@ -45,7 +45,7 @@
     kicker: scriptEl.getAttribute("data-kicker") || "Ask",
     subcopy:
       scriptEl.getAttribute("data-subcopy") ||
-      "Blynky will search articles and assist you with your questions.",
+      "Blynky assist you with your questions.",
 
     anonKey: scriptEl.getAttribute("data-anon-key") || "",
     role: (scriptEl.getAttribute("data-role") || "user").toLowerCase(),
