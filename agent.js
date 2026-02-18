@@ -55,7 +55,7 @@
 
     quickActions:
       scriptEl.getAttribute("data-quick-actions") ||
-      "Reset password|Sequential ring|Hosted UC Call Recording",
+      "Reset password|Sequential ring|Priority alert",
 
     accentCoral: scriptEl.getAttribute("data-accent-coral") || "",
     accentMint: scriptEl.getAttribute("data-accent-mint") || "",
