@@ -98,6 +98,114 @@
   }
 
   // -------------------------
+  // ✅ Safe AI formatting helpers (no HTML injection)
+  // -------------------------
+  function escapeHtml(str) {
+    return String(str || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  // Turns plain text into simple HTML:
+  // - paragraphs via blank lines
+  // - ordered lists via "1. ..."
+  // - bullet lists via "- ..." or "* ..."
+  // - **bold** -> <strong>
+  function formatAiTextToHtml(text) {
+    const raw = String(text || "");
+    const safe = escapeHtml(raw);
+
+    // Normalize newlines
+    const lines = safe.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+
+    let html = "";
+    let inUL = false;
+    let inOL = false;
+    let inP = false;
+
+    const closeP = () => {
+      if (inP) {
+        html += "</p>";
+        inP = false;
+      }
+    };
+    const closeUL = () => {
+      if (inUL) {
+        html += "</ul>";
+        inUL = false;
+      }
+    };
+    const closeOL = () => {
+      if (inOL) {
+        html += "</ol>";
+        inOL = false;
+      }
+    };
+
+    const inlineFormat = (s) => {
+      // **bold**
+      return s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      // Blank line -> paragraph break
+      if (!line.trim()) {
+        closeP();
+        closeUL();
+        closeOL();
+        continue;
+      }
+
+      const olMatch = line.match(/^\s*(\d+)\.\s+(.*)$/);
+      const ulMatch = line.match(/^\s*[-*]\s+(.*)$/);
+
+      if (olMatch) {
+        closeP();
+        closeUL();
+        if (!inOL) {
+          html += "<ol>";
+          inOL = true;
+        }
+        html += `<li>${inlineFormat(olMatch[2])}</li>`;
+        continue;
+      }
+
+      if (ulMatch) {
+        closeP();
+        closeOL();
+        if (!inUL) {
+          html += "<ul>";
+          inUL = true;
+        }
+        html += `<li>${inlineFormat(ulMatch[1])}</li>`;
+        continue;
+      }
+
+      // Normal line -> paragraph content (soft break inside paragraph)
+      closeUL();
+      closeOL();
+      if (!inP) {
+        html += "<p>";
+        inP = true;
+        html += inlineFormat(line.trim());
+      } else {
+        html += "<br/>" + inlineFormat(line.trim());
+      }
+    }
+
+    closeP();
+    closeUL();
+    closeOL();
+
+    return html || "<p></p>";
+  }
+
+  // -------------------------
   // Debug intent helpers
   // -------------------------
   function prettyIntent(intent) {
@@ -457,6 +565,25 @@
   border-color: rgba(80, 77, 97, 0.4);
 }
 
+/* ✅ AI formatted text inside bubble */
+#${ROOT_ID} .blynk-msg p{
+  margin: 0 0 10px 0;
+}
+#${ROOT_ID} .blynk-msg p:last-child{
+  margin-bottom: 0;
+}
+#${ROOT_ID} .blynk-msg ul,
+#${ROOT_ID} .blynk-msg ol{
+  margin: 6px 0 10px 18px;
+  padding: 0;
+}
+#${ROOT_ID} .blynk-msg li{
+  margin: 4px 0;
+}
+#${ROOT_ID} .blynk-msg strong{
+  font-weight: 850;
+}
+
 /* ✅ Debug intent pill */
 #${ROOT_ID} .blynk-intent{
   display:inline-flex;
@@ -629,7 +756,8 @@
 
       const fileName = String(s.file_name || s.title || s.url || "");
       const ext = extOf(fileName);
-      const isMedia = (s.kind === "media") || (s.asset_type && s.asset_type !== null) || isMediaExt(ext);
+      const isMedia =
+        s.kind === "media" || (s.asset_type && s.asset_type !== null) || isMediaExt(ext);
 
       if (isMedia) media.push(s);
       else docs.push(s);
@@ -943,8 +1071,14 @@
         }
       }
 
+      // ✅ AI formatting (user stays plain text)
       const textNode = document.createElement("div");
-      textNode.textContent = text;
+      if (role === "ai") {
+        textNode.className = "blynk-msg";
+        textNode.innerHTML = formatAiTextToHtml(text);
+      } else {
+        textNode.textContent = text;
+      }
       bubble.appendChild(textNode);
 
       if (sourcesData && sourcesData.adm) {
