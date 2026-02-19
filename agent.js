@@ -6,6 +6,11 @@
        2) sources (array)                              (back-compat)
        3) sources_flat (array)                         (older)
        4) sources: { primary, assets }                 (older grouped)
+
+   ✅ Rich media upgrade:
+   - Pulls markdown links like [Label](https://drive.google.com/file/d/ID/view...)
+   - Renders GIF/image/video previews INSIDE the main AI bubble (top)
+   - Keeps Sources list clean + clickable (bottom)
 ===================================================== */
 
 (function () {
@@ -203,6 +208,179 @@
     closeOL();
 
     return html || "<p></p>";
+  }
+
+  // -------------------------
+  // ✅ Inline rich-media from AI answer (Drive-friendly)
+  // -------------------------
+  function isGoogleDriveUrl(url) {
+    const u = String(url || "");
+    return u.includes("drive.google.com") || u.includes("docs.google.com");
+  }
+
+  function extractDriveFileId(url) {
+    try {
+      const s = String(url || "");
+      // /file/d/<ID>/...
+      let m = s.match(/\/file\/d\/([^/]+)/i);
+      if (m && m[1]) return m[1];
+
+      // open?id=<ID> or ?id=<ID>
+      m = s.match(/[?&]id=([^&]+)/i);
+      if (m && m[1]) return m[1];
+
+      // uc?export=...&id=<ID>
+      m = s.match(/\/uc\?[^#]*[?&]id=([^&]+)/i);
+      if (m && m[1]) return m[1];
+
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  function driveThumbnailUrl(fileId, size = 1200) {
+    if (!fileId) return null;
+    // This is the most reliable "img src" for Drive files that are shareable
+    return `https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w${size}`;
+  }
+
+  function drivePreviewUrl(fileId) {
+    if (!fileId) return null;
+    // Reliable embed for video/gifs that Drive can preview
+    return `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/preview`;
+  }
+
+  function guessMediaKindFromUrlOrLabel(url, label) {
+    const u = String(url || "").toLowerCase();
+    const l = String(label || "").toLowerCase();
+    const ext = extOf(u) || extOf(l);
+
+    if (["mp4", "webm", "mov", "m4v"].includes(ext)) return "video";
+    if (["png", "jpg", "jpeg", "webp", "gif", "svg", "bmp", "tiff"].includes(ext)) return "image";
+
+    // If label says "gif" but URL has no extension (Drive often)
+    if (l.includes("gif")) return "image";
+    if (l.includes("video") || l.includes("mp4")) return "video";
+
+    // Default
+    return "link";
+  }
+
+  // Extract markdown links: [Label](https://...)
+  // Returns [{ label, url, kind, provider, fileId }]
+  function extractInlineAttachmentsFromAnswer(text) {
+    const raw = String(text || "");
+    const out = [];
+    const re = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+    let m;
+    while ((m = re.exec(raw))) {
+      const label = (m[1] || "").trim();
+      const url = safeLink(m[2]);
+      if (!url) continue;
+
+      const fileId = isGoogleDriveUrl(url) ? extractDriveFileId(url) : null;
+      const kind = guessMediaKindFromUrlOrLabel(url, label);
+
+      out.push({
+        label: label || url,
+        url,
+        kind,
+        provider: fileId ? "google_drive" : "generic",
+        fileId: fileId || null,
+      });
+    }
+    return out;
+  }
+
+  // Remove markdown links from text so the chat doesn't show giant URLs
+  // We keep the label, drop the URL.
+  function stripMarkdownLinks(text) {
+    return String(text || "").replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, "$1");
+  }
+
+  function renderInlineAttachments(bubbleEl, attachments) {
+    if (!bubbleEl || !Array.isArray(attachments) || !attachments.length) return;
+
+    const wrap = el("div", { class: "blynk-inlineMedia" });
+
+    // De-dupe by url
+    const seen = new Set();
+    const items = attachments.filter((a) => {
+      const k = a && a.url;
+      if (!k || seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+
+    items.slice(0, 3).forEach((a) => {
+      const card = el("div", { class: "blynk-inlineMediaCard" });
+
+      // Title row
+      const titleRow = el("div", { class: "blynk-inlineMediaTitleRow" });
+      titleRow.appendChild(el("div", { class: "blynk-inlineMediaTitle", text: a.label || "Attachment" }));
+
+      const openLink = el("a", {
+        class: "blynk-inlineMediaOpen",
+        href: a.url,
+        target: "_blank",
+        rel: "noopener noreferrer",
+        text: "Open",
+      });
+
+      titleRow.appendChild(openLink);
+      card.appendChild(titleRow);
+
+      // Content
+      if (a.provider === "google_drive" && a.fileId) {
+        // Image/GIF -> thumbnail URL
+        if (a.kind === "image") {
+          const src = driveThumbnailUrl(a.fileId, 1200);
+          if (src) {
+            const img = el("img", {
+              class: "blynk-inlineMediaImg",
+              src,
+              alt: a.label || "",
+              loading: "lazy",
+              referrerpolicy: "no-referrer",
+            });
+            card.appendChild(img);
+          }
+        }
+        // Video -> embed preview iframe (most reliable)
+        else if (a.kind === "video") {
+          const src = drivePreviewUrl(a.fileId);
+          if (src) {
+            const iframe = el("iframe", {
+              class: "blynk-inlineMediaFrame",
+              src,
+              allow: "autoplay; encrypted-media",
+              allowfullscreen: "true",
+              loading: "lazy",
+              referrerpolicy: "no-referrer",
+            });
+            card.appendChild(iframe);
+          }
+        }
+      } else {
+        // Generic URL with image extension -> try <img>, else just a link
+        const ext = extOf(a.url);
+        if (["png", "jpg", "jpeg", "webp", "gif"].includes(ext)) {
+          const img = el("img", {
+            class: "blynk-inlineMediaImg",
+            src: a.url,
+            alt: a.label || "",
+            loading: "lazy",
+            referrerpolicy: "no-referrer",
+          });
+          card.appendChild(img);
+        }
+      }
+
+      wrap.appendChild(card);
+    });
+
+    bubbleEl.appendChild(wrap);
   }
 
   // -------------------------
@@ -566,22 +744,62 @@
 }
 
 /* ✅ AI formatted text inside bubble */
-#${ROOT_ID} .blynk-msg p{
-  margin: 0 0 10px 0;
-}
-#${ROOT_ID} .blynk-msg p:last-child{
-  margin-bottom: 0;
-}
+#${ROOT_ID} .blynk-msg p{ margin: 0 0 10px 0; }
+#${ROOT_ID} .blynk-msg p:last-child{ margin-bottom: 0; }
 #${ROOT_ID} .blynk-msg ul,
-#${ROOT_ID} .blynk-msg ol{
-  margin: 6px 0 10px 18px;
-  padding: 0;
+#${ROOT_ID} .blynk-msg ol{ margin: 6px 0 10px 18px; padding: 0; }
+#${ROOT_ID} .blynk-msg li{ margin: 4px 0; }
+#${ROOT_ID} .blynk-msg strong{ font-weight: 850; }
+
+/* ✅ Inline media cards (inside AI bubble) */
+#${ROOT_ID} .blynk-inlineMedia{
+  margin-top:10px;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
 }
-#${ROOT_ID} .blynk-msg li{
-  margin: 4px 0;
+#${ROOT_ID} .blynk-inlineMediaCard{
+  border:1px solid rgba(80,77,97,.10);
+  background: rgba(255,255,255,.58);
+  border-radius:14px;
+  overflow:hidden;
+  box-shadow: 0 18px 55px rgba(80,77,97,.05);
 }
-#${ROOT_ID} .blynk-msg strong{
-  font-weight: 850;
+#${ROOT_ID} .blynk-inlineMediaTitleRow{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:10px 12px;
+  border-bottom:1px solid rgba(80,77,97,.08);
+}
+#${ROOT_ID} .blynk-inlineMediaTitle{
+  font-size:12px;
+  font-weight:850;
+  color: rgba(80,77,97,.86);
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  max-width: 220px;
+}
+#${ROOT_ID} .blynk-inlineMediaOpen{
+  font-size:12px;
+  font-weight:850;
+  color: rgba(var(--blynk-primary-rgb), .95);
+  text-decoration:none;
+}
+#${ROOT_ID} .blynk-inlineMediaOpen:hover{ text-decoration:underline; }
+#${ROOT_ID} .blynk-inlineMediaImg{
+  width:100%;
+  max-height:220px;
+  object-fit:cover;
+  display:block;
+}
+#${ROOT_ID} .blynk-inlineMediaFrame{
+  width:100%;
+  height:220px;
+  border:0;
+  display:block;
 }
 
 /* ✅ Debug intent pill */
@@ -710,49 +928,32 @@
     document.head.appendChild(style);
   }
 
-   // -------------------------
+  // -------------------------
   // Grouped sources normalization (Articles / Docs / Media)
   // -------------------------
-
-  // ✅ Convert Google Drive preview links into direct media URLs
-  function convertDriveToDirectUrl(url) {
-    try {
-      if (!url || !url.includes("drive.google.com")) return url;
-
-      const idMatch =
-        url.match(/\/file\/d\/([^/]+)/) ||
-        url.match(/[?&]id=([^&]+)/);
-
-      if (!idMatch || !idMatch[1]) return url;
-
-      const fileId = idMatch[1];
-      return `https://drive.google.com/uc?export=download&id=${fileId}`;
-    } catch {
-      return url;
-    }
-  }
-
   function normalizeSourcesToADM(data) {
+    // 1) Preferred: sources_grouped
     if (data && data.sources_grouped && typeof data.sources_grouped === "object") {
       const sg = data.sources_grouped;
-      return {
-        articles: Array.isArray(sg.articles) ? sg.articles : [],
-        docs: Array.isArray(sg.docs) ? sg.docs : [],
-        media: Array.isArray(sg.media) ? sg.media : []
-      };
+      const articles = Array.isArray(sg.articles) ? sg.articles : [];
+      const docs = Array.isArray(sg.docs) ? sg.docs : [];
+      const media = Array.isArray(sg.media) ? sg.media : [];
+      return { articles, docs, media };
     }
 
+    // 2) Older grouped: sources: { primary, assets }
     if (data && data.sources && typeof data.sources === "object" && !Array.isArray(data.sources)) {
       const primary = Array.isArray(data.sources.primary) ? data.sources.primary : [];
       const assets = Array.isArray(data.sources.assets) ? data.sources.assets : [];
 
-      return {
-        articles: primary.filter((s) => s && (s.type === "article" || s.kind === "article")),
-        docs: primary.filter((s) => !(s && (s.type === "article" || s.kind === "article"))),
-        media: assets
-      };
+      const articles = primary.filter((s) => s && (s.type === "article" || s.kind === "article"));
+      const docs = primary.filter((s) => !(s && (s.type === "article" || s.kind === "article")));
+      const media = assets;
+
+      return { articles, docs, media };
     }
 
+    // 3) Flat: sources_flat OR sources (array)
     const flat =
       (data && Array.isArray(data.sources_flat) && data.sources_flat) ||
       (data && Array.isArray(data.sources) && data.sources) ||
@@ -774,9 +975,7 @@
       const fileName = String(s.file_name || s.title || s.url || "");
       const ext = extOf(fileName);
       const isMedia =
-        s.kind === "media" ||
-        (s.asset_type && s.asset_type !== null) ||
-        isMediaExt(ext);
+        s.kind === "media" || (s.asset_type && s.asset_type !== null) || isMediaExt(ext);
 
       if (isMedia) media.push(s);
       else docs.push(s);
@@ -806,59 +1005,27 @@
 
       const seen = new Set();
       const uniq = [];
-
       list.forEach((s) => {
-        const rawHref = safeLink(s && s.url);
-        const key = rawHref || `${s.type || ""}|${s.title || ""}|${s.file_name || ""}`;
+        const href = safeLink(s && s.url);
+        const key = href || `${s.type || ""}|${s.title || ""}|${s.file_name || ""}`;
         if (seen.has(key)) return;
         seen.add(key);
         uniq.push(s);
       });
 
       uniq.slice(0, 7).forEach((s) => {
-        const rawHref = safeLink(s.url);
-        if (!rawHref) return;
+        const href = safeLink(s.url);
+        if (!href) return;
 
-        const href = convertDriveToDirectUrl(rawHref);
-
-        const fileName = String(s.file_name || s.title || s.url || "");
-        const ext = extOf(fileName);
-
-        const mediaWrap = el("div", {
-          style: "display:flex;flex-direction:column;gap:6px;margin-bottom:8px;"
-        });
-
-        // ✅ IMAGE / GIF PREVIEW
-        if (["png","jpg","jpeg","webp","gif"].includes(ext)) {
-          const img = el("img", {
-            src: href,
-            style: "max-width:100%;max-height:180px;border-radius:12px;"
-          });
-          mediaWrap.appendChild(img);
-        }
-
-        // ✅ VIDEO PREVIEW
-        else if (["mp4","webm","mov","m4v"].includes(ext)) {
-          const vid = el("video", {
-            src: href,
-            controls: "true",
-            style: "max-width:100%;max-height:220px;border-radius:12px;"
-          });
-          mediaWrap.appendChild(vid);
-        }
-
-        // Always include clickable link
-        const link = el("a", {
+        const a = el("a", {
           class: "blynk-source",
-          href: rawHref,
+          href,
           target: "_blank",
           rel: "noopener noreferrer",
         });
 
-        link.textContent = `${sourceIcon(s)} ${s.title || s.file_name || rawHref}`;
-
-        mediaWrap.appendChild(link);
-        wrap.appendChild(mediaWrap);
+        a.textContent = `${sourceIcon(s)} ${s.title || s.file_name || href}`;
+        wrap.appendChild(a);
       });
     }
 
@@ -1125,12 +1292,20 @@
       // ✅ AI formatting (user stays plain text)
       const textNode = document.createElement("div");
       if (role === "ai") {
+        // ✅ Extract markdown attachments like [GIF](https://drive.google.com/...)
+        const attachments = extractInlineAttachmentsFromAnswer(text);
+        const cleanedText = stripMarkdownLinks(text);
+
         textNode.className = "blynk-msg";
-        textNode.innerHTML = formatAiTextToHtml(text);
+        textNode.innerHTML = formatAiTextToHtml(cleanedText);
+        bubble.appendChild(textNode);
+
+        // ✅ Render rich previews in the TOP bubble area
+        renderInlineAttachments(bubble, attachments);
       } else {
         textNode.textContent = text;
+        bubble.appendChild(textNode);
       }
-      bubble.appendChild(textNode);
 
       if (sourcesData && sourcesData.adm) {
         renderSourcesADM(bubble, sourcesData.adm, sourcesData.bypassRoleFilter);
