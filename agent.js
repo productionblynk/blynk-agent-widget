@@ -726,7 +726,7 @@
       if (!idMatch || !idMatch[1]) return url;
 
       const fileId = idMatch[1];
-      return `https://drive.google.com/uc?export=view&id=${fileId}`;
+      return `https://drive.google.com/uc?export=download&id=${fileId}`;
     } catch {
       return url;
     }
