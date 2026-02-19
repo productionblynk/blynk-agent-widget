@@ -713,29 +713,46 @@
    // -------------------------
   // Grouped sources normalization (Articles / Docs / Media)
   // -------------------------
+
+  // ✅ Convert Google Drive preview links into direct media URLs
+  function convertDriveToDirectUrl(url) {
+    try {
+      if (!url || !url.includes("drive.google.com")) return url;
+
+      const idMatch =
+        url.match(/\/file\/d\/([^/]+)/) ||
+        url.match(/[?&]id=([^&]+)/);
+
+      if (!idMatch || !idMatch[1]) return url;
+
+      const fileId = idMatch[1];
+      return `https://drive.google.com/uc?export=view&id=${fileId}`;
+    } catch {
+      return url;
+    }
+  }
+
   function normalizeSourcesToADM(data) {
-    // 1) Preferred: sources_grouped
     if (data && data.sources_grouped && typeof data.sources_grouped === "object") {
       const sg = data.sources_grouped;
-      const articles = Array.isArray(sg.articles) ? sg.articles : [];
-      const docs = Array.isArray(sg.docs) ? sg.docs : [];
-      const media = Array.isArray(sg.media) ? sg.media : [];
-      return { articles, docs, media };
+      return {
+        articles: Array.isArray(sg.articles) ? sg.articles : [],
+        docs: Array.isArray(sg.docs) ? sg.docs : [],
+        media: Array.isArray(sg.media) ? sg.media : []
+      };
     }
 
-    // 2) Older grouped: sources: { primary, assets }
     if (data && data.sources && typeof data.sources === "object" && !Array.isArray(data.sources)) {
       const primary = Array.isArray(data.sources.primary) ? data.sources.primary : [];
       const assets = Array.isArray(data.sources.assets) ? data.sources.assets : [];
 
-      const articles = primary.filter((s) => s && (s.type === "article" || s.kind === "article"));
-      const docs = primary.filter((s) => !(s && (s.type === "article" || s.kind === "article")));
-      const media = assets;
-
-      return { articles, docs, media };
+      return {
+        articles: primary.filter((s) => s && (s.type === "article" || s.kind === "article")),
+        docs: primary.filter((s) => !(s && (s.type === "article" || s.kind === "article"))),
+        media: assets
+      };
     }
 
-    // 3) Flat fallback
     const flat =
       (data && Array.isArray(data.sources_flat) && data.sources_flat) ||
       (data && Array.isArray(data.sources) && data.sources) ||
@@ -791,25 +808,27 @@
       const uniq = [];
 
       list.forEach((s) => {
-        const href = safeLink(s && s.url);
-        const key = href || `${s.type || ""}|${s.title || ""}|${s.file_name || ""}`;
+        const rawHref = safeLink(s && s.url);
+        const key = rawHref || `${s.type || ""}|${s.title || ""}|${s.file_name || ""}`;
         if (seen.has(key)) return;
         seen.add(key);
         uniq.push(s);
       });
 
       uniq.slice(0, 7).forEach((s) => {
-        const href = safeLink(s.url);
-        if (!href) return;
+        const rawHref = safeLink(s.url);
+        if (!rawHref) return;
+
+        const href = convertDriveToDirectUrl(rawHref);
 
         const fileName = String(s.file_name || s.title || s.url || "");
         const ext = extOf(fileName);
 
         const mediaWrap = el("div", {
-          style: "display:flex;flex-direction:column;gap:6px;margin-bottom:6px;"
+          style: "display:flex;flex-direction:column;gap:6px;margin-bottom:8px;"
         });
 
-        // IMAGE / GIF PREVIEW
+        // ✅ IMAGE / GIF PREVIEW
         if (["png","jpg","jpeg","webp","gif"].includes(ext)) {
           const img = el("img", {
             src: href,
@@ -818,7 +837,7 @@
           mediaWrap.appendChild(img);
         }
 
-        // VIDEO PREVIEW
+        // ✅ VIDEO PREVIEW
         else if (["mp4","webm","mov","m4v"].includes(ext)) {
           const vid = el("video", {
             src: href,
@@ -828,15 +847,15 @@
           mediaWrap.appendChild(vid);
         }
 
-        // Always include clickable source link
+        // Always include clickable link
         const link = el("a", {
           class: "blynk-source",
-          href,
+          href: rawHref,
           target: "_blank",
           rel: "noopener noreferrer",
         });
 
-        link.textContent = `${sourceIcon(s)} ${s.title || s.file_name || href}`;
+        link.textContent = `${sourceIcon(s)} ${s.title || s.file_name || rawHref}`;
 
         mediaWrap.appendChild(link);
         wrap.appendChild(mediaWrap);
