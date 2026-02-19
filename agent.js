@@ -710,7 +710,7 @@
     document.head.appendChild(style);
   }
 
-  // -------------------------
+   // -------------------------
   // Grouped sources normalization (Articles / Docs / Media)
   // -------------------------
   function normalizeSourcesToADM(data) {
@@ -735,7 +735,7 @@
       return { articles, docs, media };
     }
 
-    // 3) Flat: sources_flat OR sources (array)
+    // 3) Flat fallback
     const flat =
       (data && Array.isArray(data.sources_flat) && data.sources_flat) ||
       (data && Array.isArray(data.sources) && data.sources) ||
@@ -757,7 +757,9 @@
       const fileName = String(s.file_name || s.title || s.url || "");
       const ext = extOf(fileName);
       const isMedia =
-        s.kind === "media" || (s.asset_type && s.asset_type !== null) || isMediaExt(ext);
+        s.kind === "media" ||
+        (s.asset_type && s.asset_type !== null) ||
+        isMediaExt(ext);
 
       if (isMedia) media.push(s);
       else docs.push(s);
@@ -787,6 +789,7 @@
 
       const seen = new Set();
       const uniq = [];
+
       list.forEach((s) => {
         const href = safeLink(s && s.url);
         const key = href || `${s.type || ""}|${s.title || ""}|${s.file_name || ""}`;
@@ -799,15 +802,44 @@
         const href = safeLink(s.url);
         if (!href) return;
 
-        const a = el("a", {
+        const fileName = String(s.file_name || s.title || s.url || "");
+        const ext = extOf(fileName);
+
+        const mediaWrap = el("div", {
+          style: "display:flex;flex-direction:column;gap:6px;margin-bottom:6px;"
+        });
+
+        // IMAGE / GIF PREVIEW
+        if (["png","jpg","jpeg","webp","gif"].includes(ext)) {
+          const img = el("img", {
+            src: href,
+            style: "max-width:100%;max-height:180px;border-radius:12px;"
+          });
+          mediaWrap.appendChild(img);
+        }
+
+        // VIDEO PREVIEW
+        else if (["mp4","webm","mov","m4v"].includes(ext)) {
+          const vid = el("video", {
+            src: href,
+            controls: "true",
+            style: "max-width:100%;max-height:220px;border-radius:12px;"
+          });
+          mediaWrap.appendChild(vid);
+        }
+
+        // Always include clickable source link
+        const link = el("a", {
           class: "blynk-source",
           href,
           target: "_blank",
           rel: "noopener noreferrer",
         });
 
-        a.textContent = `${sourceIcon(s)} ${s.title || s.file_name || href}`;
-        wrap.appendChild(a);
+        link.textContent = `${sourceIcon(s)} ${s.title || s.file_name || href}`;
+
+        mediaWrap.appendChild(link);
+        wrap.appendChild(mediaWrap);
       });
     }
 
