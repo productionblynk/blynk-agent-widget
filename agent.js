@@ -8,8 +8,8 @@
        4) sources: { primary, assets }                 (older grouped)
 
    ✅ Rich media upgrade:
-   - Pulls markdown links like [Label](https://drive.google.com/file/d/ID/view...)
-   - Renders GIF/image/video previews INSIDE the main AI bubble (top)
+   - Uses backend `rich_media` (preferred) to render GIF/image/video previews INSIDE the main AI bubble (top)
+   - Falls back to markdown links like [Label](https://...)
    - Keeps Sources list clean + clickable (bottom)
 ===================================================== */
 
@@ -48,9 +48,7 @@
 
     title: scriptEl.getAttribute("data-title") || "Blynky",
     kicker: scriptEl.getAttribute("data-kicker") || "Ask",
-    subcopy:
-      scriptEl.getAttribute("data-subcopy") ||
-      "Blynky assist you with your questions.",
+    subcopy: scriptEl.getAttribute("data-subcopy") || "Blynky assist you with your questions.",
 
     anonKey: scriptEl.getAttribute("data-anon-key") || "",
     role: (scriptEl.getAttribute("data-role") || "user").toLowerCase(),
@@ -59,8 +57,7 @@
     settingsUrl: scriptEl.getAttribute("data-settings-url") || "",
 
     quickActions:
-      scriptEl.getAttribute("data-quick-actions") ||
-      "Reset password|Sequential ring|Priority alert",
+      scriptEl.getAttribute("data-quick-actions") || "Reset password|Sequential ring|Priority alert",
 
     accentCoral: scriptEl.getAttribute("data-accent-coral") || "",
     accentMint: scriptEl.getAttribute("data-accent-mint") || "",
@@ -102,6 +99,15 @@
     );
   }
 
+  function isWebflowVideoPage(url) {
+    try {
+      const u = new URL(String(url || ""), window.location.href);
+      return /\/video\/[^/]+$/i.test(u.pathname);
+    } catch {
+      return false;
+    }
+  }
+
   // -------------------------
   // ✅ Safe AI formatting helpers (no HTML injection)
   // -------------------------
@@ -114,16 +120,10 @@
       .replace(/'/g, "&#39;");
   }
 
-  // Turns plain text into simple HTML:
-  // - paragraphs via blank lines
-  // - ordered lists via "1. ..."
-  // - bullet lists via "- ..." or "* ..."
-  // - **bold** -> <strong>
   function formatAiTextToHtml(text) {
     const raw = String(text || "");
     const safe = escapeHtml(raw);
 
-    // Normalize newlines
     const lines = safe.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
 
     let html = "";
@@ -151,14 +151,12 @@
     };
 
     const inlineFormat = (s) => {
-      // **bold**
       return s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
     };
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
 
-      // Blank line -> paragraph break
       if (!line.trim()) {
         closeP();
         closeUL();
@@ -191,7 +189,6 @@
         continue;
       }
 
-      // Normal line -> paragraph content (soft break inside paragraph)
       closeUL();
       closeOL();
       if (!inP) {
@@ -211,7 +208,7 @@
   }
 
   // -------------------------
-  // ✅ Inline rich-media from AI answer (Drive-friendly)
+  // ✅ Inline rich-media from AI answer (fallback)
   // -------------------------
   function isGoogleDriveUrl(url) {
     const u = String(url || "");
@@ -221,15 +218,12 @@
   function extractDriveFileId(url) {
     try {
       const s = String(url || "");
-      // /file/d/<ID>/...
       let m = s.match(/\/file\/d\/([^/]+)/i);
       if (m && m[1]) return m[1];
 
-      // open?id=<ID> or ?id=<ID>
       m = s.match(/[?&]id=([^&]+)/i);
       if (m && m[1]) return m[1];
 
-      // uc?export=...&id=<ID>
       m = s.match(/\/uc\?[^#]*[?&]id=([^&]+)/i);
       if (m && m[1]) return m[1];
 
@@ -241,13 +235,11 @@
 
   function driveThumbnailUrl(fileId, size = 1200) {
     if (!fileId) return null;
-    // This is the most reliable "img src" for Drive files that are shareable
     return `https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w${size}`;
   }
 
   function drivePreviewUrl(fileId) {
     if (!fileId) return null;
-    // Reliable embed for video/gifs that Drive can preview
     return `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/preview`;
   }
 
@@ -259,16 +251,14 @@
     if (["mp4", "webm", "mov", "m4v"].includes(ext)) return "video";
     if (["png", "jpg", "jpeg", "webp", "gif", "svg", "bmp", "tiff"].includes(ext)) return "image";
 
-    // If label says "gif" but URL has no extension (Drive often)
+    if (isWebflowVideoPage(url)) return "video";
+
     if (l.includes("gif")) return "image";
     if (l.includes("video") || l.includes("mp4")) return "video";
 
-    // Default
     return "link";
   }
 
-  // Extract markdown links: [Label](https://...)
-  // Returns [{ label, url, kind, provider, fileId }]
   function extractInlineAttachmentsFromAnswer(text) {
     const raw = String(text || "");
     const out = [];
@@ -293,10 +283,45 @@
     return out;
   }
 
-  // Remove markdown links from text so the chat doesn't show giant URLs
-  // We keep the label, drop the URL.
   function stripMarkdownLinks(text) {
     return String(text || "").replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, "$1");
+  }
+
+  // -------------------------
+  // ✅ Preferred rich media: backend `rich_media`
+  // -------------------------
+  function normalizeBackendRichMedia(data) {
+    const arr =
+      (data && Array.isArray(data.rich_media) && data.rich_media) ||
+      (data && Array.isArray(data.richMedia) && data.richMedia) ||
+      [];
+    return arr
+      .map((m) => {
+        const url = safeLink(m && m.url);
+        if (!url) return null;
+
+        const title = String(m.title || m.file_name || m.fileName || "Media").trim();
+        const assetType = String(m.asset_type || m.assetType || "").toLowerCase().trim();
+        const fileName = String(m.file_name || m.fileName || "").trim();
+
+        let kind = "link";
+        if (assetType === "gif" || assetType === "image") kind = "image";
+        else if (assetType === "video") kind = "video";
+        else {
+          // infer
+          kind = guessMediaKindFromUrlOrLabel(url, title || fileName);
+        }
+
+        return {
+          label: title || fileName || url,
+          url,
+          kind,
+          provider: String(m.provider || "").trim() || "backend",
+          fileId: isGoogleDriveUrl(url) ? extractDriveFileId(url) : null,
+          fileName,
+        };
+      })
+      .filter(Boolean);
   }
 
   function renderInlineAttachments(bubbleEl, attachments) {
@@ -304,7 +329,6 @@
 
     const wrap = el("div", { class: "blynk-inlineMedia" });
 
-    // De-dupe by url
     const seen = new Set();
     const items = attachments.filter((a) => {
       const k = a && a.url;
@@ -316,7 +340,6 @@
     items.slice(0, 3).forEach((a) => {
       const card = el("div", { class: "blynk-inlineMediaCard" });
 
-      // Title row
       const titleRow = el("div", { class: "blynk-inlineMediaTitleRow" });
       titleRow.appendChild(el("div", { class: "blynk-inlineMediaTitle", text: a.label || "Attachment" }));
 
@@ -332,23 +355,37 @@
       card.appendChild(titleRow);
 
       // Content
-      if (a.provider === "google_drive" && a.fileId) {
-        // Image/GIF -> thumbnail URL
-        if (a.kind === "image") {
-          const src = driveThumbnailUrl(a.fileId, 1200);
-          if (src) {
-            const img = el("img", {
-              class: "blynk-inlineMediaImg",
-              src,
-              alt: a.label || "",
-              loading: "lazy",
-              referrerpolicy: "no-referrer",
-            });
-            card.appendChild(img);
-          }
+      if (a.kind === "image") {
+        // Prefer direct URL (backend now returns Drive "uc" links); fallback to thumbnail when needed.
+        let src = a.url;
+        if (a.provider === "google_drive" && a.fileId && !isMediaExt(extOf(src))) {
+          const thumb = driveThumbnailUrl(a.fileId, 1200);
+          if (thumb) src = thumb;
         }
-        // Video -> embed preview iframe (most reliable)
-        else if (a.kind === "video") {
+
+        const img = el("img", {
+          class: "blynk-inlineMediaImg",
+          src,
+          alt: a.label || "",
+          loading: "lazy",
+          referrerpolicy: "no-referrer",
+        });
+        card.appendChild(img);
+      } else if (a.kind === "video") {
+        // If it's a Webflow /video/<slug> page, iframe it
+        if (isWebflowVideoPage(a.url)) {
+          const iframe = el("iframe", {
+            class: "blynk-inlineMediaFrame",
+            src: a.url,
+            allow: "autoplay; encrypted-media",
+            allowfullscreen: "true",
+            loading: "lazy",
+            referrerpolicy: "no-referrer",
+          });
+          card.appendChild(iframe);
+        }
+        // If Google Drive and not a direct mp4, iframe preview
+        else if (a.provider === "google_drive" && a.fileId && !["mp4", "webm", "mov", "m4v"].includes(extOf(a.url))) {
           const src = drivePreviewUrl(a.fileId);
           if (src) {
             const iframe = el("iframe", {
@@ -362,8 +399,19 @@
             card.appendChild(iframe);
           }
         }
+        // Else try native <video>
+        else {
+          const video = el("video", {
+            class: "blynk-inlineMediaVideo",
+            controls: "true",
+            playsinline: "true",
+            preload: "metadata",
+          });
+          video.src = a.url;
+          card.appendChild(video);
+        }
       } else {
-        // Generic URL with image extension -> try <img>, else just a link
+        // Generic URL with image extension -> try <img>
         const ext = extOf(a.url);
         if (["png", "jpg", "jpeg", "webp", "gif"].includes(ext)) {
           const img = el("img", {
@@ -447,8 +495,7 @@
     if (ext === "pdf") return "📄";
     if (ext === "gif") return "🎞️";
     if (["mp4", "mov", "webm", "m4v"].includes(ext)) return "🎬";
-    if (["png", "jpg", "jpeg", "webp", "svg", "bmp", "tiff"].includes(ext))
-      return "🖼️";
+    if (["png", "jpg", "jpeg", "webp", "svg", "bmp", "tiff"].includes(ext)) return "🖼️";
     if (["doc", "docx"].includes(ext)) return "📝";
     if (["xls", "xlsx"].includes(ext)) return "📊";
 
@@ -461,9 +508,7 @@
     if (role === "admin") return list;
 
     return list.filter((s) => {
-      const ar = String(s.audience_role || s.audienceRole || "user")
-        .toLowerCase()
-        .trim();
+      const ar = String(s.audience_role || s.audienceRole || "user").toLowerCase().trim();
       return ar === "user";
     });
   }
@@ -743,7 +788,6 @@
   border-color: rgba(80, 77, 97, 0.4);
 }
 
-/* ✅ AI formatted text inside bubble */
 #${ROOT_ID} .blynk-msg p{ margin: 0 0 10px 0; }
 #${ROOT_ID} .blynk-msg p:last-child{ margin-bottom: 0; }
 #${ROOT_ID} .blynk-msg ul,
@@ -800,6 +844,13 @@
   height:220px;
   border:0;
   display:block;
+}
+#${ROOT_ID} .blynk-inlineMediaVideo{
+  width:100%;
+  height:220px;
+  display:block;
+  border:0;
+  background: rgba(255,255,255,.45);
 }
 
 /* ✅ Debug intent pill */
@@ -932,7 +983,6 @@
   // Grouped sources normalization (Articles / Docs / Media)
   // -------------------------
   function normalizeSourcesToADM(data) {
-    // 1) Preferred: sources_grouped
     if (data && data.sources_grouped && typeof data.sources_grouped === "object") {
       const sg = data.sources_grouped;
       const articles = Array.isArray(sg.articles) ? sg.articles : [];
@@ -941,7 +991,6 @@
       return { articles, docs, media };
     }
 
-    // 2) Older grouped: sources: { primary, assets }
     if (data && data.sources && typeof data.sources === "object" && !Array.isArray(data.sources)) {
       const primary = Array.isArray(data.sources.primary) ? data.sources.primary : [];
       const assets = Array.isArray(data.sources.assets) ? data.sources.assets : [];
@@ -953,7 +1002,6 @@
       return { articles, docs, media };
     }
 
-    // 3) Flat: sources_flat OR sources (array)
     const flat =
       (data && Array.isArray(data.sources_flat) && data.sources_flat) ||
       (data && Array.isArray(data.sources) && data.sources) ||
@@ -974,8 +1022,7 @@
 
       const fileName = String(s.file_name || s.title || s.url || "");
       const ext = extOf(fileName);
-      const isMedia =
-        s.kind === "media" || (s.asset_type && s.asset_type !== null) || isMediaExt(ext);
+      const isMedia = s.kind === "media" || (s.asset_type && s.asset_type !== null) || isMediaExt(ext);
 
       if (isMedia) media.push(s);
       else docs.push(s);
@@ -1281,27 +1328,33 @@
       const wrap = el("div");
       const bubble = el("div", { class: `blynk-bubble ${role} blynk-enter` });
 
-      // ✅ Debug-only intent pill (only for AI messages)
       if (role === "ai" && config.debug && sourcesData && sourcesData.intent) {
         const label = prettyIntent(sourcesData.intent);
-        if (label) {
-          bubble.appendChild(el("div", { class: "blynk-intent", text: label }));
-        }
+        if (label) bubble.appendChild(el("div", { class: "blynk-intent", text: label }));
       }
 
-      // ✅ AI formatting (user stays plain text)
       const textNode = document.createElement("div");
+
       if (role === "ai") {
-        // ✅ Extract markdown attachments like [GIF](https://drive.google.com/...)
-        const attachments = extractInlineAttachmentsFromAnswer(text);
+        // 1) Prefer backend rich_media (preview card behavior)
+        const backendMedia = (sourcesData && sourcesData.richMedia) || [];
+
+        // 2) Fallback: markdown attachments in answer (older behavior)
+        const mdAttachments = extractInlineAttachmentsFromAnswer(text);
+
+        // Clean display text (remove markdown link URLs)
         const cleanedText = stripMarkdownLinks(text);
 
         textNode.className = "blynk-msg";
         textNode.innerHTML = formatAiTextToHtml(cleanedText);
         bubble.appendChild(textNode);
 
-        // ✅ Render rich previews in the TOP bubble area
-        renderInlineAttachments(bubble, attachments);
+        // Render previews (backend first; fallback to markdown if backend empty)
+        if (Array.isArray(backendMedia) && backendMedia.length) {
+          renderInlineAttachments(bubble, backendMedia);
+        } else {
+          renderInlineAttachments(bubble, mdAttachments);
+        }
       } else {
         textNode.textContent = text;
         bubble.appendChild(textNode);
@@ -1313,7 +1366,6 @@
 
       const m = el("div", { class: `blynk-meta ${role}`, text: meta });
 
-      // ✅ Debug-only meta suffix
       if (role === "ai" && config.debug && sourcesData && sourcesData.intent) {
         const label = String(sourcesData.intent || "").trim();
         if (label) m.textContent = `${meta} • intent: ${label}`;
@@ -1335,10 +1387,7 @@
 
     appendMessage(role, text, sourcesData) {
       const meta = role === "user" ? "You • now" : "Blynky • now";
-      this.ui.stage.insertBefore(
-        this._msgRow({ role, text, meta, sourcesData }),
-        this._typingRow || null
-      );
+      this.ui.stage.insertBefore(this._msgRow({ role, text, meta, sourcesData }), this._typingRow || null);
       this.scrollToBottom();
     },
 
@@ -1386,24 +1435,27 @@
 
         const data = await res.json();
 
-        const bypassRoleFilter = Boolean(
-          data && (data.disableRoleFilter || data.disable_role_filter)
-        );
+        const bypassRoleFilter = Boolean(data && (data.disableRoleFilter || data.disable_role_filter));
 
         // Normalize to Articles / Docs / Media
         const adm = normalizeSourcesToADM(data);
 
-        // ✅ pull intent from backend response
+        // Pull intent from backend response
         const intent = data && data.intent ? String(data.intent) : "";
 
+        // ✅ Backend rich_media (preferred for previews)
+        const richMedia = normalizeBackendRichMedia(data);
+
         if (config.debug) {
-          log("Ask response intent:", intent || "(none)", data);
+          log("Ask response intent:", intent || "(none)");
+          log("Ask response rich_media:", richMedia);
+          log("Ask response full:", data);
         }
 
         this.setTyping(false);
 
         const answer = String((data && data.answer) || "No answer returned.").trim();
-        this.appendMessage("ai", answer, { adm, bypassRoleFilter, intent });
+        this.appendMessage("ai", answer, { adm, bypassRoleFilter, intent, richMedia });
       } catch (err) {
         this.setTyping(false);
         this.appendMessage("ai", "Sorry — something went wrong. Please try again.");
