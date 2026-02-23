@@ -287,150 +287,113 @@
     return String(text || "").replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, "$1");
   }
 
-  // -------------------------
-  // ✅ Preferred rich media: backend `rich_media`
-  // -------------------------
-  function normalizeBackendRichMedia(data) {
-    const arr =
-      (data && Array.isArray(data.rich_media) && data.rich_media) ||
-      (data && Array.isArray(data.richMedia) && data.richMedia) ||
-      [];
-    return arr
-      .map((m) => {
-        const url = safeLink(m && m.url);
-        if (!url) return null;
-
-        const title = String(m.title || m.file_name || m.fileName || "Media").trim();
-        const assetType = String(m.asset_type || m.assetType || "").toLowerCase().trim();
-        const fileName = String(m.file_name || m.fileName || "").trim();
-
-        let kind = "link";
-        if (assetType === "gif" || assetType === "image") kind = "image";
-        else if (assetType === "video") kind = "video";
-        else {
-          // infer
-          kind = guessMediaKindFromUrlOrLabel(url, title || fileName);
-        }
-
-        return {
-          label: title || fileName || url,
-          url,
-          kind,
-          provider: String(m.provider || "").trim() || "backend",
-          fileId: isGoogleDriveUrl(url) ? extractDriveFileId(url) : null,
-          fileName,
-        };
-      })
-      .filter(Boolean);
-  }
-
-  function renderInlineAttachments(bubbleEl, attachments) {
-    if (!bubbleEl || !Array.isArray(attachments) || !attachments.length) return;
-
-    const wrap = el("div", { class: "blynk-inlineMedia" });
-
-    const seen = new Set();
-    const items = attachments.filter((a) => {
-      const k = a && a.url;
-      if (!k || seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
-
-    items.slice(0, 3).forEach((a) => {
-      const card = el("div", { class: "blynk-inlineMediaCard" });
-
-      const titleRow = el("div", { class: "blynk-inlineMediaTitleRow" });
-      titleRow.appendChild(el("div", { class: "blynk-inlineMediaTitle", text: a.label || "Attachment" }));
-
-      const openLink = el("a", {
-        class: "blynk-inlineMediaOpen",
-        href: a.url,
-        target: "_blank",
-        rel: "noopener noreferrer",
-        text: "Open",
-      });
-
-      titleRow.appendChild(openLink);
-      card.appendChild(titleRow);
-
-      // Content
-      if (a.kind === "image") {
-        // Prefer direct URL (backend now returns Drive "uc" links); fallback to thumbnail when needed.
-        let src = a.url;
-        if (a.provider === "google_drive" && a.fileId && !isMediaExt(extOf(src))) {
-          const thumb = driveThumbnailUrl(a.fileId, 1200);
-          if (thumb) src = thumb;
-        }
-
-        const img = el("img", {
-          class: "blynk-inlineMediaImg",
-          src,
-          alt: a.label || "",
-          loading: "lazy",
-          referrerpolicy: "no-referrer",
-        });
-        card.appendChild(img);
-      } else if (a.kind === "video") {
-        // If it's a Webflow /video/<slug> page, iframe it
-        if (isWebflowVideoPage(a.url)) {
-          const iframe = el("iframe", {
-            class: "blynk-inlineMediaFrame",
-            src: a.url,
-            allow: "autoplay; encrypted-media",
-            allowfullscreen: "true",
-            loading: "lazy",
-            referrerpolicy: "no-referrer",
-          });
-          card.appendChild(iframe);
-        }
-        // If Google Drive and not a direct mp4, iframe preview
-        else if (a.provider === "google_drive" && a.fileId && !["mp4", "webm", "mov", "m4v"].includes(extOf(a.url))) {
-          const src = drivePreviewUrl(a.fileId);
-          if (src) {
-            const iframe = el("iframe", {
-              class: "blynk-inlineMediaFrame",
-              src,
-              allow: "autoplay; encrypted-media",
-              allowfullscreen: "true",
-              loading: "lazy",
-              referrerpolicy: "no-referrer",
-            });
-            card.appendChild(iframe);
-          }
-        }
-        // Else try native <video>
-        else {
-          const video = el("video", {
-            class: "blynk-inlineMediaVideo",
-            controls: "true",
-            playsinline: "true",
-            preload: "metadata",
-          });
-          video.src = a.url;
-          card.appendChild(video);
-        }
-      } else {
-        // Generic URL with image extension -> try <img>
-        const ext = extOf(a.url);
-        if (["png", "jpg", "jpeg", "webp", "gif"].includes(ext)) {
-          const img = el("img", {
-            class: "blynk-inlineMediaImg",
-            src: a.url,
-            alt: a.label || "",
-            loading: "lazy",
-            referrerpolicy: "no-referrer",
-          });
-          card.appendChild(img);
-        }
-      }
-
-      wrap.appendChild(card);
-    });
-
-    bubbleEl.appendChild(wrap);
-  }
-
+   // -------------------------
+   // ✅ Preferred rich media: backend `rich_media`
+   // - Only inline preview GIF/Images
+   // - Videos always stay as normal links (no inline preview)
+   // -------------------------
+   function normalizeBackendRichMedia(data) {
+     const arr =
+       (data && Array.isArray(data.rich_media) && data.rich_media) ||
+       (data && Array.isArray(data.richMedia) && data.richMedia) ||
+       [];
+   
+     return arr
+       .map((m) => {
+         const url = safeLink(m && m.url);
+         if (!url) return null;
+   
+         const title = String(m.title || m.file_name || m.fileName || "Media").trim();
+         const assetType = String(m.asset_type || m.assetType || "").toLowerCase().trim();
+         const fileName = String(m.file_name || m.fileName || "").trim();
+   
+         // ✅ Only allow inline previews for gif/image.
+         // ❌ Force video to be a normal link (no preview).
+         let kind = "link";
+         if (assetType === "gif" || assetType === "image") kind = "image";
+   
+         return {
+           label: title || fileName || url,
+           url,
+           kind,
+           provider: String(m.provider || "").trim() || "backend",
+           fileId: isGoogleDriveUrl(url) ? extractDriveFileId(url) : null,
+           fileName,
+         };
+       })
+       .filter(Boolean);
+   }
+   
+   function renderInlineAttachments(bubbleEl, attachments) {
+     if (!bubbleEl || !Array.isArray(attachments) || !attachments.length) return;
+   
+     const wrap = el("div", { class: "blynk-inlineMedia" });
+   
+     const seen = new Set();
+     const items = attachments.filter((a) => {
+       const k = a && a.url;
+       if (!k || seen.has(k)) return false;
+       seen.add(k);
+       return true;
+     });
+   
+     items.slice(0, 3).forEach((a) => {
+       // ✅ Safety: never inline preview videos (links only)
+       if (a.kind === "video") return;
+   
+       const card = el("div", { class: "blynk-inlineMediaCard" });
+   
+       const titleRow = el("div", { class: "blynk-inlineMediaTitleRow" });
+       titleRow.appendChild(el("div", { class: "blynk-inlineMediaTitle", text: a.label || "Attachment" }));
+   
+       const openLink = el("a", {
+         class: "blynk-inlineMediaOpen",
+         href: a.url,
+         target: "_blank",
+         rel: "noopener noreferrer",
+         text: "Open",
+       });
+   
+       titleRow.appendChild(openLink);
+       card.appendChild(titleRow);
+   
+       // Content
+       if (a.kind === "image") {
+         // Prefer direct URL (backend now returns Drive "uc" links); fallback to thumbnail when needed.
+         let src = a.url;
+         if (a.provider === "google_drive" && a.fileId && !isMediaExt(extOf(src))) {
+           const thumb = driveThumbnailUrl(a.fileId, 1200);
+           if (thumb) src = thumb;
+         }
+   
+         const img = el("img", {
+           class: "blynk-inlineMediaImg",
+           src,
+           alt: a.label || "",
+           loading: "lazy",
+           referrerpolicy: "no-referrer",
+         });
+         card.appendChild(img);
+       } else {
+         // Generic URL with image extension -> try <img>
+         const ext = extOf(a.url);
+         if (["png", "jpg", "jpeg", "webp", "gif"].includes(ext)) {
+           const img = el("img", {
+             class: "blynk-inlineMediaImg",
+             src: a.url,
+             alt: a.label || "",
+             loading: "lazy",
+             referrerpolicy: "no-referrer",
+           });
+           card.appendChild(img);
+         }
+       }
+   
+       wrap.appendChild(card);
+     });
+   
+     bubbleEl.appendChild(wrap);
+   }
   // -------------------------
   // Debug intent helpers
   // -------------------------
