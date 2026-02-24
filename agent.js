@@ -8,7 +8,7 @@
        4) sources: { primary, assets }                 (older grouped)
 
    ✅ Rich media upgrade:
-   - Uses backend `rich_media` (preferred) to render GIF/image/video previews INSIDE the main AI bubble (top)
+   - Uses backend `rich_media` (preferred) to render GIF/image previews INSIDE the main AI bubble (top)
    - Falls back to markdown links like [Label](https://...)
    - Keeps Sources list clean + clickable (bottom)
 ===================================================== */
@@ -238,11 +238,6 @@
     return `https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w${size}`;
   }
 
-  function drivePreviewUrl(fileId) {
-    if (!fileId) return null;
-    return `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/preview`;
-  }
-
   function guessMediaKindFromUrlOrLabel(url, label) {
     const u = String(url || "").toLowerCase();
     const l = String(label || "").toLowerCase();
@@ -287,113 +282,110 @@
     return String(text || "").replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, "$1");
   }
 
-   // -------------------------
-   // ✅ Preferred rich media: backend `rich_media`
-   // - Only inline preview GIF/Images
-   // - Videos always stay as normal links (no inline preview)
-   // -------------------------
-   function normalizeBackendRichMedia(data) {
-     const arr =
-       (data && Array.isArray(data.rich_media) && data.rich_media) ||
-       (data && Array.isArray(data.richMedia) && data.richMedia) ||
-       [];
-   
-     return arr
-       .map((m) => {
-         const url = safeLink(m && m.url);
-         if (!url) return null;
-   
-         const title = String(m.title || m.file_name || m.fileName || "Media").trim();
-         const assetType = String(m.asset_type || m.assetType || "").toLowerCase().trim();
-         const fileName = String(m.file_name || m.fileName || "").trim();
-   
-         // ✅ Only allow inline previews for gif/image.
-         // ❌ Force video to be a normal link (no preview).
-         let kind = "link";
-         if (assetType === "gif" || assetType === "image") kind = "image";
-   
-         return {
-           label: title || fileName || url,
-           url,
-           kind,
-           provider: String(m.provider || "").trim() || "backend",
-           fileId: isGoogleDriveUrl(url) ? extractDriveFileId(url) : null,
-           fileName,
-         };
-       })
-       .filter(Boolean);
-   }
-   
-   function renderInlineAttachments(bubbleEl, attachments) {
-     if (!bubbleEl || !Array.isArray(attachments) || !attachments.length) return;
-   
-     const wrap = el("div", { class: "blynk-inlineMedia" });
-   
-     const seen = new Set();
-     const items = attachments.filter((a) => {
-       const k = a && a.url;
-       if (!k || seen.has(k)) return false;
-       seen.add(k);
-       return true;
-     });
-   
-     items.slice(0, 3).forEach((a) => {
-       // ✅ Safety: never inline preview videos (links only)
-       if (a.kind === "video") return;
-   
-       const card = el("div", { class: "blynk-inlineMediaCard" });
-   
-       const titleRow = el("div", { class: "blynk-inlineMediaTitleRow" });
-       titleRow.appendChild(el("div", { class: "blynk-inlineMediaTitle", text: a.label || "Attachment" }));
-   
-       const openLink = el("a", {
-         class: "blynk-inlineMediaOpen",
-         href: a.url,
-         target: "_blank",
-         rel: "noopener noreferrer",
-         text: "Open",
-       });
-   
-       titleRow.appendChild(openLink);
-       card.appendChild(titleRow);
-   
-       // Content
-       if (a.kind === "image") {
-         // Prefer direct URL (backend now returns Drive "uc" links); fallback to thumbnail when needed.
-         let src = a.url;
-         if (a.provider === "google_drive" && a.fileId && !isMediaExt(extOf(src))) {
-           const thumb = driveThumbnailUrl(a.fileId, 1200);
-           if (thumb) src = thumb;
-         }
-   
-         const img = el("img", {
-           class: "blynk-inlineMediaImg",
-           src,
-           alt: a.label || "",
-           loading: "lazy",
-           referrerpolicy: "no-referrer",
-         });
-         card.appendChild(img);
-       } else {
-         // Generic URL with image extension -> try <img>
-         const ext = extOf(a.url);
-         if (["png", "jpg", "jpeg", "webp", "gif"].includes(ext)) {
-           const img = el("img", {
-             class: "blynk-inlineMediaImg",
-             src: a.url,
-             alt: a.label || "",
-             loading: "lazy",
-             referrerpolicy: "no-referrer",
-           });
-           card.appendChild(img);
-         }
-       }
-   
-       wrap.appendChild(card);
-     });
-   
-     bubbleEl.appendChild(wrap);
-   }
+  // -------------------------
+  // ✅ Preferred rich media: backend `rich_media`
+  // - Only inline preview GIF/Images
+  // - Videos always stay as normal links (no inline preview)
+  // -------------------------
+  function normalizeBackendRichMedia(data) {
+    const arr =
+      (data && Array.isArray(data.rich_media) && data.rich_media) ||
+      (data && Array.isArray(data.richMedia) && data.richMedia) ||
+      [];
+
+    return arr
+      .map((m) => {
+        const url = safeLink(m && m.url);
+        if (!url) return null;
+
+        const title = String(m.title || m.file_name || m.fileName || "Media").trim();
+        const fileName = String(m.file_name || m.fileName || "").trim();
+
+        const assetTypeRaw = String(m.asset_type || m.assetType || "")
+          .toLowerCase()
+          .trim();
+
+        let kind = "link";
+
+        if (assetTypeRaw === "gif" || assetTypeRaw === "image") {
+          kind = "image";
+        } else if (!assetTypeRaw) {
+          const ext = extOf(url);
+          if (["png", "jpg", "jpeg", "webp", "gif", "svg"].includes(ext)) kind = "image";
+        }
+
+        return {
+          label: title || fileName || url,
+          url,
+          kind,
+          provider: String(m.provider || "").trim() || "backend",
+          fileId: isGoogleDriveUrl(url) ? extractDriveFileId(url) : null,
+          fileName,
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function renderInlineAttachments(bubbleEl, attachments) {
+    if (!bubbleEl || !Array.isArray(attachments) || !attachments.length) return;
+
+    const seen = new Set();
+    const items = attachments.filter((a) => {
+      const k = a && a.url;
+      if (!k || seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+
+    let rendered = 0;
+    const wrap = el("div", { class: "blynk-inlineMedia" });
+
+    items.slice(0, 3).forEach((a) => {
+      if (!a || a.kind !== "image") return;
+
+      let src = a.url;
+
+      if (a.provider === "google_drive" && a.fileId && !isMediaExt(extOf(src))) {
+        const thumb = driveThumbnailUrl(a.fileId, 1200);
+        if (thumb) src = thumb;
+      }
+
+      const ext = extOf(src);
+      const isImg = ["png", "jpg", "jpeg", "webp", "gif", "svg"].includes(ext);
+      if (!isImg) return;
+
+      const card = el("div", { class: "blynk-inlineMediaCard" });
+
+      const titleRow = el("div", { class: "blynk-inlineMediaTitleRow" });
+      titleRow.appendChild(el("div", { class: "blynk-inlineMediaTitle", text: a.label || "Attachment" }));
+
+      const openLink = el("a", {
+        class: "blynk-inlineMediaOpen",
+        href: a.url,
+        target: "_blank",
+        rel: "noopener noreferrer",
+        text: "Open",
+      });
+
+      titleRow.appendChild(openLink);
+      card.appendChild(titleRow);
+
+      const img = el("img", {
+        class: "blynk-inlineMediaImg",
+        src,
+        alt: a.label || "",
+        loading: "lazy",
+        referrerpolicy: "no-referrer",
+      });
+
+      card.appendChild(img);
+      wrap.appendChild(card);
+      rendered += 1;
+    });
+
+    if (rendered > 0) bubbleEl.appendChild(wrap);
+  }
+
   // -------------------------
   // Debug intent helpers
   // -------------------------
@@ -423,25 +415,25 @@
     return { r, g, b, css: `${r}, ${g}, ${b}` };
   }
 
-  function setThemeVars(el, theme) {
-    if (!el || !theme) return;
+  function setThemeVars(elm, theme) {
+    if (!elm || !theme) return;
 
     if (theme.primary) {
-      el.style.setProperty("--blynk-primary", theme.primary);
+      elm.style.setProperty("--blynk-primary", theme.primary);
       const rgb = hexToRgb(theme.primary);
-      if (rgb) el.style.setProperty("--blynk-primary-rgb", rgb.css);
+      if (rgb) elm.style.setProperty("--blynk-primary-rgb", rgb.css);
     }
 
     if (theme.accent) {
-      el.style.setProperty("--blynk-accent", theme.accent);
+      elm.style.setProperty("--blynk-accent", theme.accent);
       const rgb = hexToRgb(theme.accent);
-      if (rgb) el.style.setProperty("--blynk-accent-rgb", rgb.css);
+      if (rgb) elm.style.setProperty("--blynk-accent-rgb", rgb.css);
     }
 
     if (theme.launcher) {
-      el.style.setProperty("--blynk-launcher", theme.launcher);
+      elm.style.setProperty("--blynk-launcher", theme.launcher);
       const rgb = hexToRgb(theme.launcher);
-      if (rgb) el.style.setProperty("--blynk-launcher-rgb", rgb.css);
+      if (rgb) elm.style.setProperty("--blynk-launcher-rgb", rgb.css);
     }
   }
 
@@ -523,7 +515,8 @@
   // DOM helpers
   // -------------------------
   function createRoot() {
-    if (document.getElementById(ROOT_ID)) return document.getElementById(ROOT_ID);
+    const existing = document.getElementById(ROOT_ID);
+    if (existing) return existing;
     const root = document.createElement("div");
     root.id = ROOT_ID;
     document.body.appendChild(root);
@@ -802,18 +795,30 @@
   object-fit:cover;
   display:block;
 }
-#${ROOT_ID} .blynk-inlineMediaFrame{
-  width:100%;
-  height:220px;
-  border:0;
-  display:block;
+
+/* ✅ Typing indicator (MISSING BEFORE — now added) */
+#${ROOT_ID} .blynk-typing{
+  padding:12px 14px;
+  border-radius:18px;
+  border:1px solid rgba(80,77,97,.08);
+  box-shadow: 0 18px 55px rgba(80,77,97,.06);
+  background: rgba(255,255,255,.62);
+  display:flex;
+  gap:6px;
+  align-items:center;
 }
-#${ROOT_ID} .blynk-inlineMediaVideo{
-  width:100%;
-  height:220px;
-  display:block;
-  border:0;
-  background: rgba(255,255,255,.45);
+#${ROOT_ID} .blynk-dot{
+  width:6px;
+  height:6px;
+  border-radius:999px;
+  background: rgba(80,77,97,.55);
+  animation: blynkDot 1.2s infinite ease-in-out;
+}
+#${ROOT_ID} .blynk-dot:nth-child(2){ animation-delay: .15s; }
+#${ROOT_ID} .blynk-dot:nth-child(3){ animation-delay: .30s; }
+@keyframes blynkDot{
+  0%, 80%, 100%{ transform: translateY(0); opacity:.45; }
+  40%{ transform: translateY(-4px); opacity:1; }
 }
 
 /* ✅ Debug intent pill */
@@ -1184,6 +1189,7 @@
       const stage = el("div", { class: "blynk-stage" });
       stage.appendChild(this._msgRow({ role: "ai", text: "Hi! How can I help today?", meta: "Blynky • just now" }));
 
+      // Typing row (avatar + dots)
       const typingRow = el("div", { class: "blynk-row ai" });
       const typingAvatar = el("div", { class: "blynk-avatar ai", "aria-hidden": "true" }, [
         el("img", { alt: "", src: this.tenant.profile_icon || DEFAULT_PROFILE_ICON }),
@@ -1299,20 +1305,14 @@
       const textNode = document.createElement("div");
 
       if (role === "ai") {
-        // 1) Prefer backend rich_media (preview card behavior)
         const backendMedia = (sourcesData && sourcesData.richMedia) || [];
-
-        // 2) Fallback: markdown attachments in answer (older behavior)
         const mdAttachments = extractInlineAttachmentsFromAnswer(text);
-
-        // Clean display text (remove markdown link URLs)
         const cleanedText = stripMarkdownLinks(text);
 
         textNode.className = "blynk-msg";
         textNode.innerHTML = formatAiTextToHtml(cleanedText);
         bubble.appendChild(textNode);
 
-        // Render previews (backend first; fallback to markdown if backend empty)
         if (Array.isArray(backendMedia) && backendMedia.length) {
           renderInlineAttachments(bubble, backendMedia);
         } else {
@@ -1375,11 +1375,13 @@
 
         const headers = { "Content-Type": "application/json" };
 
+        // ✅ Supabase anon auth
         if (this.config.anonKey) {
           headers.apikey = this.config.anonKey;
           headers.Authorization = `Bearer ${this.config.anonKey}`;
         }
 
+        // ✅ Admin override (if present)
         if (this.config.adminToken) {
           payload.adminToken = this.config.adminToken;
           headers["x-admin-token"] = this.config.adminToken;
@@ -1399,14 +1401,8 @@
         const data = await res.json();
 
         const bypassRoleFilter = Boolean(data && (data.disableRoleFilter || data.disable_role_filter));
-
-        // Normalize to Articles / Docs / Media
         const adm = normalizeSourcesToADM(data);
-
-        // Pull intent from backend response
         const intent = data && data.intent ? String(data.intent) : "";
-
-        // ✅ Backend rich_media (preferred for previews)
         const richMedia = normalizeBackendRichMedia(data);
 
         if (config.debug) {
