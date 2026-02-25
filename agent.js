@@ -565,6 +565,47 @@
   border: 1px solid rgba(var(--blynk-launcher-rgb), .35);
 }
 
+#${ROOT_ID} .blynk-sticker{
+  position:relative;
+  max-width:260px;
+  padding:12px 16px;
+  border-radius:16px 16px 4px 16px;
+  background:rgba(255,255,255,.92);
+  backdrop-filter:blur(14px);
+  -webkit-backdrop-filter:blur(14px);
+  box-shadow:0 8px 32px rgba(0,0,0,.12), 0 1px 3px rgba(0,0,0,.06);
+  border:1px solid rgba(80,77,97,.10);
+  font-size:13.5px;
+  line-height:1.45;
+  color:#504d61;
+  cursor:pointer;
+  opacity:0;
+  transform:translateY(8px) scale(.96);
+  animation:blynkStickerIn .4s cubic-bezier(.2,.8,.2,1) forwards;
+  transition:opacity .3s ease, transform .3s ease;
+}
+#${ROOT_ID} .blynk-sticker.hiding{
+  opacity:0 !important;
+  transform:translateY(4px) scale(.97) !important;
+}
+#${ROOT_ID} .blynk-sticker::before{
+  content:"";
+  position:absolute;
+  top:-6px; left:12px;
+  width:24px; height:24px;
+  border-radius:50%;
+  background:var(--blynk-sticker-icon, url('${DEFAULT_PROFILE_ICON}')) center/cover no-repeat;
+  border:2px solid #fff;
+  box-shadow:0 2px 6px rgba(0,0,0,.1);
+}
+#${ROOT_ID} .blynk-sticker .blynk-sticker-text{
+  margin-top:12px;
+}
+@keyframes blynkStickerIn{
+  from{opacity:0;transform:translateY(8px) scale(.96)}
+  to{opacity:1;transform:translateY(0) scale(1)}
+}
+
 #${ROOT_ID} .blynk-panel{
   width:360px; max-width:calc(100vw - 32px);
   height:720px; max-height:calc(100vh - 120px);
@@ -1246,12 +1287,97 @@
       `;
       launcher.addEventListener("click", () => this.toggle());
 
+      // Sticker (proactive article greeting bubble)
+      const sticker = el("div", { class: "blynk-sticker" });
+      sticker.style.display = "none";
+      const stickerText = el("div", { class: "blynk-sticker-text" });
+      sticker.appendChild(stickerText);
+      sticker.addEventListener("click", () => {
+        this._dismissSticker();
+        this.open();
+      });
+
       wrap.appendChild(panel);
+      wrap.appendChild(sticker);
       wrap.appendChild(launcher);
       this.root.appendChild(wrap);
 
-      this.ui = { wrap, panel, widget, stage, input, sendBtn, launcher };
+      this.ui = { wrap, panel, widget, stage, input, sendBtn, launcher, sticker, stickerText };
       this.close();
+
+      // Proactive article greeting
+      this._maybeShowArticleGreeting();
+    },
+
+    _dismissSticker() {
+      const s = this.ui.sticker;
+      if (!s || s.style.display === "none") return;
+      s.classList.add("hiding");
+      setTimeout(() => { s.style.display = "none"; }, 350);
+    },
+
+    async _maybeShowArticleGreeting() {
+      try {
+        const href = window.location.href;
+        const url = new URL(href);
+        // Match /articles/<slug> pattern
+        const match = url.pathname.match(/\/articles\/([^/?#]+)/i);
+        if (!match) return;
+
+        const slug = match[1];
+        if (!slug) return;
+
+        // Only once per session
+        const storageKey = "blynky_article_greeted";
+        if (sessionStorage.getItem(storageKey)) return;
+        sessionStorage.setItem(storageKey, "1");
+
+        // Wait 3s before showing sticker
+        await new Promise((r) => setTimeout(r, 3000));
+
+        // Don't show if user already opened the chat
+        if (this.isOpen) return;
+
+        const payload = {
+          question: "__page_greeting__",
+          clientId: this.config.clientId,
+          role: this.config.role,
+          pageUrl: href,
+        };
+
+        const headers = { "Content-Type": "application/json" };
+        if (this.config.anonKey) {
+          headers.apikey = this.config.anonKey;
+          headers.Authorization = `Bearer ${this.config.anonKey}`;
+        }
+        if (this.config.adminToken) {
+          payload.adminToken = this.config.adminToken;
+          headers["x-admin-token"] = this.config.adminToken;
+        }
+
+        const res = await fetch(this.config.apiUrl, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) return;
+        const data = await res.json();
+        const greeting = (data && data.answer) || "";
+        if (!greeting) return;
+
+        // Show sticker (update avatar to tenant icon if available)
+        const stickerIcon = this.tenant.profile_icon || DEFAULT_PROFILE_ICON;
+        this.ui.sticker.style.setProperty("--blynk-sticker-icon", "url('" + stickerIcon + "')");
+        this.ui.stickerText.textContent = greeting;
+        this.ui.sticker.style.display = "";
+        log("Article sticker shown for slug:", slug);
+
+        // Auto-dismiss after 12s
+        setTimeout(() => this._dismissSticker(), 12000);
+      } catch (e) {
+        log("Article greeting error:", e);
+      }
     },
 
     open() {
@@ -1259,6 +1385,7 @@
       this.ui.panel.classList.add("open");
       this.ui.input.focus();
       this.scrollToBottom();
+      this._dismissSticker();
     },
 
     close() {
@@ -1371,6 +1498,7 @@
           mode: this.config.mode,
           role: this.config.role,
           debug: this.config.debug,
+          pageUrl: window.location.href,
         };
 
         const headers = { "Content-Type": "application/json" };
