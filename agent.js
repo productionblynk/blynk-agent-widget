@@ -1162,6 +1162,7 @@
     },
     _typingRow: null,
     _conversationHistory: [],
+    _sessionMessages: [],
 
     _trimHistory(history, maxMessages, maxChars) {
       if (!Array.isArray(history) || !history.length) return [];
@@ -1184,6 +1185,42 @@
         result.shift();
       }
       return result;
+    },
+
+    // --- Session persistence helpers ---
+    _sessionKey() { return "blynky_session_" + this.config.clientId; },
+    _openStateKey() { return "blynky_open_" + this.config.clientId; },
+
+    _saveSession() {
+      try {
+        const msgs = this._sessionMessages.slice(-30);
+        let json = JSON.stringify(msgs);
+        // Trim oldest messages until under 128KB
+        while (json.length > 131072 && msgs.length > 1) {
+          msgs.shift();
+          json = JSON.stringify(msgs);
+        }
+        sessionStorage.setItem(this._sessionKey(), json);
+      } catch (_) { /* private browsing or quota — silently ignore */ }
+    },
+
+    _loadSession() {
+      try {
+        const raw = sessionStorage.getItem(this._sessionKey());
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) && parsed.length ? parsed : null;
+      } catch (_) { return null; }
+    },
+
+    _saveOpenState(isOpen) {
+      try { sessionStorage.setItem(this._openStateKey(), isOpen ? "1" : "0"); }
+      catch (_) {}
+    },
+
+    _loadOpenState() {
+      try { return sessionStorage.getItem(this._openStateKey()); }
+      catch (_) { return null; }
     },
 
     async init() {
@@ -1220,6 +1257,12 @@
       }
 
       this.mountUI();
+
+      // Restore widget open state from session
+      if (this._loadOpenState() === "1") {
+        this.open();
+      }
+
       log("Initialized", { config: this.config, tenant: this.tenant });
     },
 
@@ -1305,7 +1348,21 @@
       head.appendChild(chips);
 
       const stage = el("div", { class: "blynk-stage" });
-      stage.appendChild(this._msgRow({ role: "ai", text: "Hi! How can I help today?", meta: "Blynky • just now" }));
+
+      // Restore previous session or show greeting
+      const savedSession = this._loadSession();
+      if (savedSession && savedSession.length) {
+        savedSession.forEach((msg) => {
+          const role = msg.role === "user" ? "user" : "ai";
+          const meta = role === "user" ? "You • earlier" : "Blynky • earlier";
+          stage.appendChild(this._msgRow({ role, text: msg.content, meta, sourcesData: msg.sourcesData || undefined }));
+          // Rebuild conversation history for multi-turn
+          this._conversationHistory.push({ role: role === "ai" ? "assistant" : "user", content: msg.content });
+        });
+        this._sessionMessages = savedSession.slice();
+      } else {
+        stage.appendChild(this._msgRow({ role: "ai", text: "Hi! How can I help today?", meta: "Blynky • just now" }));
+      }
 
       // Typing row (avatar + dots)
       const typingRow = el("div", { class: "blynk-row ai" });
@@ -1394,6 +1451,9 @@
     },
 
     async _maybeShowArticleGreeting() {
+      // Skip proactive greeting if there's an existing conversation
+      if (this._sessionMessages.length > 0) return;
+
       try {
         const href = window.location.href;
         const url = new URL(href);
@@ -1463,11 +1523,13 @@
       this.ui.input.focus();
       this.scrollToBottom();
       this._dismissSticker();
+      this._saveOpenState(true);
     },
 
     close() {
       this.isOpen = false;
       this.ui.panel.classList.remove("open");
+      this._saveOpenState(false);
     },
 
     toggle() {
@@ -1583,6 +1645,8 @@
 
       // Track conversation history
       this._conversationHistory.push({ role: "user", content: text });
+      this._sessionMessages.push({ role: "user", content: text });
+      this._saveSession();
 
       this.setSending(true);
       this.setTyping(true);
@@ -1645,12 +1709,18 @@
 
         // Track assistant response in history
         this._conversationHistory.push({ role: "assistant", content: answer });
+        this._sessionMessages.push({ role: "ai", content: answer, sourcesData: { adm, bypassRoleFilter, intent, richMedia } });
+        this._saveSession();
       } catch (err) {
         this.setTyping(false);
         this.appendMessage("ai", "Sorry — something went wrong. Please try again.");
         // Remove the user message that got no answer
         if (this._conversationHistory.length && this._conversationHistory[this._conversationHistory.length - 1].role === "user") {
           this._conversationHistory.pop();
+        }
+        if (this._sessionMessages.length && this._sessionMessages[this._sessionMessages.length - 1].role === "user") {
+          this._sessionMessages.pop();
+          this._saveSession();
         }
         log("Error", err);
       } finally {
