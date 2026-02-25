@@ -785,6 +785,59 @@
   border-color: rgba(80, 77, 97, 0.4);
 }
 
+/* Copy button on AI bubbles */
+#${ROOT_ID} .blynk-copyBtn{
+  position:absolute;
+  top:8px; right:8px;
+  width:28px; height:28px;
+  border-radius:8px;
+  border:1px solid rgba(80,77,97,.10);
+  background:rgba(255,255,255,.72);
+  backdrop-filter:blur(8px);
+  -webkit-backdrop-filter:blur(8px);
+  display:grid; place-items:center;
+  cursor:pointer;
+  opacity:0;
+  transition: opacity 180ms ease, background 180ms ease;
+  z-index:3;
+  padding:0;
+}
+#${ROOT_ID} .blynk-bubble:hover .blynk-copyBtn{
+  opacity:1;
+}
+#${ROOT_ID} .blynk-copyBtn:hover{
+  background:rgba(255,255,255,.92);
+  border-color:rgba(var(--blynk-primary-rgb),.25);
+}
+#${ROOT_ID} .blynk-copyBtn svg{
+  width:14px; height:14px;
+  color:rgba(80,77,97,.55);
+  transition: color 180ms ease;
+}
+#${ROOT_ID} .blynk-copyBtn.copied svg{
+  color:rgba(var(--blynk-primary-rgb),.85);
+}
+#${ROOT_ID} .blynk-copyTooltip{
+  position:absolute;
+  top:-28px; left:50%;
+  transform:translateX(-50%) translateY(4px);
+  font-size:11px;
+  font-weight:700;
+  color:rgba(var(--blynk-primary-rgb),.9);
+  background:rgba(255,255,255,.92);
+  border:1px solid rgba(var(--blynk-primary-rgb),.18);
+  border-radius:6px;
+  padding:3px 7px;
+  white-space:nowrap;
+  pointer-events:none;
+  opacity:0;
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+#${ROOT_ID} .blynk-copyBtn.copied .blynk-copyTooltip{
+  opacity:1;
+  transform:translateX(-50%) translateY(0);
+}
+
 #${ROOT_ID} .blynk-msg p{ margin: 0 0 10px 0; }
 #${ROOT_ID} .blynk-msg p:last-child{ margin-bottom: 0; }
 #${ROOT_ID} .blynk-msg ul,
@@ -1108,6 +1161,30 @@
       theme_launcher: "",
     },
     _typingRow: null,
+    _conversationHistory: [],
+
+    _trimHistory(history, maxMessages, maxChars) {
+      if (!Array.isArray(history) || !history.length) return [];
+      let trimmed = history.slice(-maxMessages);
+      // Ensure history starts with a user message
+      while (trimmed.length && trimmed[0].role !== "user") {
+        trimmed = trimmed.slice(1);
+      }
+      // Cap total character count
+      let total = 0;
+      const result = [];
+      for (let i = trimmed.length - 1; i >= 0; i--) {
+        const len = (trimmed[i].content || "").length;
+        if (total + len > maxChars) break;
+        total += len;
+        result.unshift(trimmed[i]);
+      }
+      // Re-ensure starts with user
+      while (result.length && result[0].role !== "user") {
+        result.shift();
+      }
+      return result;
+    },
 
     async init() {
       injectStylesOnce();
@@ -1445,6 +1522,22 @@
         } else {
           renderInlineAttachments(bubble, mdAttachments);
         }
+
+        // Copy button (skip initial greeting)
+        if (text !== "Hi! How can I help today?") {
+          const copyBtn = el("button", { class: "blynk-copyBtn", type: "button", "aria-label": "Copy answer" });
+          copyBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span class="blynk-copyTooltip">Copied!</span>';
+          copyBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            try {
+              navigator.clipboard.writeText(cleanedText || text).then(() => {
+                copyBtn.classList.add("copied");
+                setTimeout(() => copyBtn.classList.remove("copied"), 1800);
+              }).catch(() => { log("Clipboard write failed"); });
+            } catch (_) { log("Clipboard API unavailable"); }
+          });
+          bubble.appendChild(copyBtn);
+        }
       } else {
         textNode.textContent = text;
         bubble.appendChild(textNode);
@@ -1488,10 +1581,15 @@
       this.appendMessage("user", text);
       this.ui.input.value = "";
 
+      // Track conversation history
+      this._conversationHistory.push({ role: "user", content: text });
+
       this.setSending(true);
       this.setTyping(true);
 
       try {
+        const trimmedHistory = this._trimHistory(this._conversationHistory, 20, 12000);
+
         const payload = {
           question: text,
           clientId: this.config.clientId,
@@ -1499,6 +1597,7 @@
           role: this.config.role,
           debug: this.config.debug,
           pageUrl: window.location.href,
+          conversationHistory: trimmedHistory,
         };
 
         const headers = { "Content-Type": "application/json" };
@@ -1543,9 +1642,16 @@
 
         const answer = String((data && data.answer) || "No answer returned.").trim();
         this.appendMessage("ai", answer, { adm, bypassRoleFilter, intent, richMedia });
+
+        // Track assistant response in history
+        this._conversationHistory.push({ role: "assistant", content: answer });
       } catch (err) {
         this.setTyping(false);
         this.appendMessage("ai", "Sorry — something went wrong. Please try again.");
+        // Remove the user message that got no answer
+        if (this._conversationHistory.length && this._conversationHistory[this._conversationHistory.length - 1].role === "user") {
+          this._conversationHistory.pop();
+        }
         log("Error", err);
       } finally {
         this.setSending(false);
