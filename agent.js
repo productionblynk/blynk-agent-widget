@@ -1126,12 +1126,12 @@
         const href = safeLink(s.url);
         if (!href) return;
 
-        const a = el("a", {
-          class: "blynk-source",
-          href,
-          target: "_blank",
-          rel: "noopener noreferrer",
-        });
+        const props = { class: "blynk-source", href };
+        if (titleText !== "ARTICLES") {
+          props.target = "_blank";
+          props.rel = "noopener noreferrer";
+        }
+        const a = el("a", props);
 
         a.textContent = `${sourceIcon(s)} ${s.title || s.file_name || href}`;
         wrap.appendChild(a);
