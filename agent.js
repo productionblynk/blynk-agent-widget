@@ -1127,7 +1127,7 @@
         if (!href) return;
 
         const props = { class: "blynk-source", href };
-        if (titleText !== "ARTICLES") {
+        if (titleText !== "ARTICLES" && !isWebflowVideoPage(href)) {
           props.target = "_blank";
           props.rel = "noopener noreferrer";
         }
