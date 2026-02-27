@@ -1065,14 +1065,24 @@
 #${ROOT_ID} .blynk-meta.ai{margin-left:40px}
 #${ROOT_ID} .blynk-meta.user{text-align:right; margin-right:40px}
 
-/* Sources block */
+/* Sources block (collapsible) */
 #${ROOT_ID} .blynk-sources{
   margin-top:10px;
   padding-top:10px;
   border-top: 1px solid rgba(80,77,97,.10);
   display:flex;
   flex-direction:column;
-  gap:8px;
+  gap:0;
+}
+#${ROOT_ID} .blynk-sourcesToggle{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  cursor:pointer;
+  border:none;
+  background:none;
+  padding:0;
+  font-family:inherit;
 }
 #${ROOT_ID} .blynk-sourcesTitle{
   font-size:12px;
@@ -1080,6 +1090,32 @@
   letter-spacing:.02em;
   color: rgba(80,77,97,.72);
   text-transform: uppercase;
+}
+#${ROOT_ID} .blynk-sourcesChevron{
+  width:14px;
+  height:14px;
+  color: rgba(80,77,97,.52);
+  transition: transform 280ms cubic-bezier(.2,.8,.2,1);
+  flex-shrink:0;
+}
+#${ROOT_ID} .blynk-sources.expanded .blynk-sourcesChevron{
+  transform: rotate(180deg);
+}
+#${ROOT_ID} .blynk-sourcesBody{
+  max-height:0;
+  opacity:0;
+  overflow:hidden;
+  transition: max-height 320ms cubic-bezier(.2,.8,.2,1), opacity 280ms ease;
+}
+#${ROOT_ID} .blynk-sources.expanded .blynk-sourcesBody{
+  max-height:600px;
+  opacity:1;
+}
+#${ROOT_ID} .blynk-sourcesBodyInner{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  padding-top:8px;
 }
 #${ROOT_ID} .blynk-sourcesGroupTitle{
   font-size:11px;
@@ -1152,6 +1188,74 @@
 #${ROOT_ID} .blynk-send:active{transform: translateY(0)}
 #${ROOT_ID} .blynk-send:disabled{opacity:.55; cursor:not-allowed}
 
+/* Full-screen mobile layout */
+@media (max-width: 479px){
+  #${ROOT_ID} .blynk-wrap{
+    bottom:0; right:0;
+  }
+  #${ROOT_ID} .blynk-wrap.blynk-mobile-open{
+    inset:0;
+  }
+
+  #${ROOT_ID} .blynk-wrap.blynk-mobile-open .blynk-panel{
+    width:100% !important;
+    height:100% !important;
+    max-width:100% !important;
+    max-height:100% !important;
+    border-radius:0 !important;
+  }
+  #${ROOT_ID} .blynk-wrap.blynk-mobile-open .blynk-widget{
+    border-radius:0;
+    --radius-xl:0px;
+  }
+  #${ROOT_ID} .blynk-wrap.blynk-mobile-open .blynk-widget::after{
+    border-radius:0;
+  }
+
+  /* Safe area insets */
+  #${ROOT_ID} .blynk-wrap.blynk-mobile-open .blynk-header{
+    padding-top: calc(18px + env(safe-area-inset-top));
+    padding-left: calc(16px + env(safe-area-inset-left));
+    padding-right: calc(16px + env(safe-area-inset-right));
+  }
+  #${ROOT_ID} .blynk-wrap.blynk-mobile-open .blynk-stage{
+    padding-left: calc(14px + env(safe-area-inset-left));
+    padding-right: calc(14px + env(safe-area-inset-right));
+  }
+  #${ROOT_ID} .blynk-wrap.blynk-mobile-open .blynk-composer{
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+    padding-left: calc(12px + env(safe-area-inset-left));
+    padding-right: calc(12px + env(safe-area-inset-right));
+  }
+
+  /* Larger close button for touch */
+  #${ROOT_ID} .blynk-wrap.blynk-mobile-open .blynk-close{
+    width:44px; height:44px;
+  }
+  #${ROOT_ID} .blynk-wrap.blynk-mobile-open .blynk-x{
+    font-size:22px;
+  }
+
+  /* Launcher position with safe area */
+  #${ROOT_ID} .blynk-launcher{
+    position:fixed;
+    bottom: calc(24px + env(safe-area-inset-bottom));
+    right: calc(24px + env(safe-area-inset-right));
+  }
+  /* Sticker position with safe area */
+  #${ROOT_ID} .blynk-sticker{
+    position:fixed;
+    bottom: calc(90px + env(safe-area-inset-bottom));
+    right: calc(24px + env(safe-area-inset-right));
+  }
+
+  /* Hide launcher + sticker when panel is full-screen */
+  #${ROOT_ID} .blynk-wrap.blynk-mobile-open .blynk-launcher,
+  #${ROOT_ID} .blynk-wrap.blynk-mobile-open .blynk-sticker{
+    display:none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce){
   #${ROOT_ID} *{animation:none !important; transition:none !important; scroll-behavior:auto !important}
 }
@@ -1223,13 +1327,53 @@
 
     if (!articles.length && !docs.length && !media.length) return;
 
+    // Count total unique sources across all groups
+    const countSeen = new Set();
+    [articles, docs, media].forEach((list) => {
+      list.forEach((s) => {
+        const href = safeLink(s && s.url);
+        const key = href || `${(s && s.type) || ""}|${(s && s.title) || ""}|${(s && s.file_name) || ""}`;
+        countSeen.add(key);
+      });
+    });
+    const totalCount = countSeen.size;
+
     const wrap = el("div", { class: "blynk-sources" });
-    wrap.appendChild(el("div", { class: "blynk-sourcesTitle", text: "SOURCES" }));
+
+    // Toggle button
+    const toggle = el("button", { class: "blynk-sourcesToggle", type: "button" });
+    toggle.setAttribute("aria-expanded", "false");
+    const titleSpan = el("span", { class: "blynk-sourcesTitle", text: `SOURCES (${totalCount})` });
+    const chevronSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    chevronSvg.setAttribute("class", "blynk-sourcesChevron");
+    chevronSvg.setAttribute("width", "14");
+    chevronSvg.setAttribute("height", "14");
+    chevronSvg.setAttribute("viewBox", "0 0 24 24");
+    chevronSvg.setAttribute("fill", "none");
+    chevronSvg.setAttribute("stroke", "currentColor");
+    chevronSvg.setAttribute("stroke-width", "2.5");
+    chevronSvg.setAttribute("stroke-linecap", "round");
+    chevronSvg.setAttribute("stroke-linejoin", "round");
+    const chevronPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    chevronPath.setAttribute("d", "M6 9l6 6 6-6");
+    chevronSvg.appendChild(chevronPath);
+    toggle.appendChild(titleSpan);
+    toggle.appendChild(chevronSvg);
+
+    // Body (collapsed by default)
+    const body = el("div", { class: "blynk-sourcesBody" });
+    const bodyInner = el("div", { class: "blynk-sourcesBodyInner" });
+
+    toggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isExpanded = wrap.classList.toggle("expanded");
+      toggle.setAttribute("aria-expanded", String(isExpanded));
+    });
 
     function addGroup(titleText, list) {
       if (!list.length) return;
 
-      wrap.appendChild(el("div", { class: "blynk-sourcesGroupTitle", text: titleText }));
+      bodyInner.appendChild(el("div", { class: "blynk-sourcesGroupTitle", text: titleText }));
 
       const seen = new Set();
       const uniq = [];
@@ -1253,7 +1397,7 @@
         const a = el("a", props);
 
         a.textContent = `${sourceIcon(s)} ${s.title || s.file_name || href}`;
-        wrap.appendChild(a);
+        bodyInner.appendChild(a);
       });
     }
 
@@ -1261,6 +1405,9 @@
     addGroup("DOCS", docs);
     addGroup("MEDIA", media);
 
+    body.appendChild(bodyInner);
+    wrap.appendChild(toggle);
+    wrap.appendChild(body);
     container.appendChild(wrap);
   }
 
@@ -1283,6 +1430,8 @@
     _conversationHistory: [],
     _sessionMessages: [],
     _lastSendTime: 0,
+
+    _isMobile() { return window.innerWidth < 480; },
 
     _trimHistory(history, maxMessages, maxChars) {
       if (!Array.isArray(history) || !history.length) return [];
@@ -1377,6 +1526,13 @@
       }
 
       this.mountUI();
+
+      // Mobile full-screen: sync class on resize/orientation change
+      window.addEventListener("resize", () => {
+        if (!this.isOpen) return;
+        if (this._isMobile()) this.ui.wrap.classList.add("blynk-mobile-open");
+        else this.ui.wrap.classList.remove("blynk-mobile-open");
+      });
 
       // Restore widget open state from session
       if (this._loadOpenState() === "1") {
@@ -1646,6 +1802,7 @@
     open() {
       this.isOpen = true;
       this.ui.panel.classList.add("open");
+      if (this._isMobile()) this.ui.wrap.classList.add("blynk-mobile-open");
       this.ui.input.focus();
       this.scrollToBottom();
       this._dismissSticker();
@@ -1655,6 +1812,7 @@
     close() {
       this.isOpen = false;
       this.ui.panel.classList.remove("open");
+      this.ui.wrap.classList.remove("blynk-mobile-open");
       this._saveOpenState(false);
     },
 
