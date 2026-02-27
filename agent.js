@@ -109,6 +109,28 @@
   }
 
   // -------------------------
+  // Feedback SVG icons (Lucide-style, matching copy button stroke)
+  // -------------------------
+  const THUMB_UP_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/></svg>';
+  const THUMB_DOWN_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/></svg>';
+
+  function sendFeedback(queryId, tenantId, feedback) {
+    const apiBase = apiBaseFromAskUrl(config.apiUrl);
+    if (!apiBase || !queryId) return;
+    const url = apiBase + "/feedback";
+    const headers = { "Content-Type": "application/json" };
+    if (config.anonKey) {
+      headers.apikey = config.anonKey;
+      headers.Authorization = "Bearer " + config.anonKey;
+    }
+    fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ queryId, tenantId, feedback }),
+    }).catch(function () { /* fire-and-forget */ });
+  }
+
+  // -------------------------
   // ✅ Safe AI formatting helpers (no HTML injection)
   // -------------------------
   function escapeHtml(str) {
@@ -836,6 +858,71 @@
 #${ROOT_ID} .blynk-copyBtn.copied .blynk-copyTooltip{
   opacity:1;
   transform:translateX(-50%) translateY(0);
+}
+
+/* Feedback buttons row */
+#${ROOT_ID} .blynk-feedbackRow{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  padding:6px 0 0;
+  margin:8px 0 0;
+  border-top:1px solid rgba(80,77,97,.06);
+}
+#${ROOT_ID} .blynk-feedbackLabel{
+  font-size:11px;
+  font-weight:600;
+  color:rgba(80,77,97,.40);
+  margin-right:2px;
+}
+#${ROOT_ID} .blynk-feedbackBtn{
+  width:28px; height:28px;
+  border-radius:8px;
+  border:1px solid rgba(80,77,97,.10);
+  background:rgba(255,255,255,.72);
+  backdrop-filter:blur(8px);
+  -webkit-backdrop-filter:blur(8px);
+  display:grid; place-items:center;
+  cursor:pointer;
+  transition: opacity 180ms ease, background 180ms ease, border-color 180ms ease;
+  padding:0;
+}
+#${ROOT_ID} .blynk-feedbackBtn:hover{
+  background:rgba(255,255,255,.92);
+  border-color:rgba(var(--blynk-primary-rgb),.25);
+}
+#${ROOT_ID} .blynk-feedbackBtn svg{
+  width:14px; height:14px;
+  color:rgba(80,77,97,.45);
+  transition: color 180ms ease;
+}
+#${ROOT_ID} .blynk-feedbackBtn.selected{
+  background:rgba(var(--blynk-primary-rgb),.12);
+  border-color:rgba(var(--blynk-primary-rgb),.30);
+}
+#${ROOT_ID} .blynk-feedbackBtn.selected svg{
+  color:rgba(var(--blynk-primary-rgb),.85);
+}
+#${ROOT_ID} .blynk-feedbackBtn.down.selected{
+  background:rgba(239,68,68,.12);
+  border-color:rgba(239,68,68,.30);
+}
+#${ROOT_ID} .blynk-feedbackBtn.down.selected svg{
+  color:rgba(239,68,68,.85);
+}
+#${ROOT_ID} .blynk-feedbackBtn.dimmed{
+  opacity:.35;
+}
+#${ROOT_ID} .blynk-feedbackThanks{
+  font-size:11px;
+  font-weight:700;
+  color:rgba(var(--blynk-primary-rgb),.75);
+  opacity:0;
+  transition: opacity 300ms ease;
+  margin-left:2px;
+}
+#${ROOT_ID} .blynk-feedbackThanks.visible{
+  opacity:1;
 }
 
 #${ROOT_ID} .blynk-msg p{ margin: 0 0 10px 0; }
@@ -1609,6 +1696,62 @@
         renderSourcesADM(bubble, sourcesData.adm, sourcesData.bypassRoleFilter);
       }
 
+      // Feedback buttons (AI messages with a queryId only, skip greeting/error)
+      if (role === "ai" && sourcesData && sourcesData.queryId) {
+        const feedbackRow = el("div", { class: "blynk-feedbackRow" });
+        const label = el("span", { class: "blynk-feedbackLabel", text: "Helpful?" });
+        const thumbUp = el("button", { class: "blynk-feedbackBtn", type: "button", "aria-label": "Thumbs up" });
+        thumbUp.innerHTML = THUMB_UP_SVG;
+        const thumbDown = el("button", { class: "blynk-feedbackBtn down", type: "button", "aria-label": "Thumbs down" });
+        thumbDown.innerHTML = THUMB_DOWN_SVG;
+        const thanks = el("span", { class: "blynk-feedbackThanks", text: "Thanks!" });
+
+        // Restore feedback state from session
+        const existingFeedback = sourcesData.feedback || "";
+        if (existingFeedback === "up") {
+          thumbUp.classList.add("selected");
+          thumbDown.classList.add("dimmed");
+          thanks.classList.add("visible");
+        } else if (existingFeedback === "down") {
+          thumbDown.classList.add("selected");
+          thumbUp.classList.add("dimmed");
+          thanks.classList.add("visible");
+        }
+
+        const qId = sourcesData.queryId;
+        const tId = config.clientId;
+
+        thumbUp.addEventListener("click", function (e) {
+          e.stopPropagation();
+          thumbUp.classList.add("selected");
+          thumbUp.classList.remove("dimmed");
+          thumbDown.classList.remove("selected");
+          thumbDown.classList.add("dimmed");
+          thanks.classList.add("visible");
+          sourcesData.feedback = "up";
+          sendFeedback(qId, tId, "up");
+          Agent._saveSession();
+        });
+
+        thumbDown.addEventListener("click", function (e) {
+          e.stopPropagation();
+          thumbDown.classList.add("selected");
+          thumbDown.classList.remove("dimmed");
+          thumbUp.classList.remove("selected");
+          thumbUp.classList.add("dimmed");
+          thanks.classList.add("visible");
+          sourcesData.feedback = "down";
+          sendFeedback(qId, tId, "down");
+          Agent._saveSession();
+        });
+
+        feedbackRow.appendChild(label);
+        feedbackRow.appendChild(thumbUp);
+        feedbackRow.appendChild(thumbDown);
+        feedbackRow.appendChild(thanks);
+        bubble.appendChild(feedbackRow);
+      }
+
       const m = el("div", { class: `blynk-meta ${role}`, text: meta });
 
       if (role === "ai" && config.debug && sourcesData && sourcesData.intent) {
@@ -1695,21 +1838,24 @@
         const adm = normalizeSourcesToADM(data);
         const intent = data && data.intent ? String(data.intent) : "";
         const richMedia = normalizeBackendRichMedia(data);
+        const queryId = (data && data.query_id) ? String(data.query_id) : "";
 
         if (config.debug) {
           log("Ask response intent:", intent || "(none)");
           log("Ask response rich_media:", richMedia);
+          log("Ask response query_id:", queryId || "(none)");
           log("Ask response full:", data);
         }
 
         this.setTyping(false);
 
         const answer = String((data && data.answer) || "No answer returned.").trim();
-        this.appendMessage("ai", answer, { adm, bypassRoleFilter, intent, richMedia });
+        const sd = { adm, bypassRoleFilter, intent, richMedia, queryId };
+        this.appendMessage("ai", answer, sd);
 
         // Track assistant response in history
         this._conversationHistory.push({ role: "assistant", content: answer });
-        this._sessionMessages.push({ role: "ai", content: answer, sourcesData: { adm, bypassRoleFilter, intent, richMedia } });
+        this._sessionMessages.push({ role: "ai", content: answer, sourcesData: sd });
         this._saveSession();
       } catch (err) {
         this.setTyping(false);
