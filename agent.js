@@ -790,7 +790,7 @@
 #${ROOT_ID} .blynk-avatar img{width:100%; height:100%; object-fit:cover; display:block}
 
 #${ROOT_ID} .blynk-bubble{
-  max-width:74%;
+  max-width:88%;
   padding:12px 14px;
   border-radius:18px;
   border:1px solid rgba(80,77,97,.08);
@@ -923,6 +923,30 @@
 }
 #${ROOT_ID} .blynk-feedbackThanks.visible{
   opacity:1;
+}
+
+/* Follow-up question chips */
+#${ROOT_ID} .blynk-followups{
+  display:flex; gap:6px; flex-wrap:wrap;
+  padding:8px 0 0; margin:6px 0 0;
+  border-top:1px solid rgba(80,77,97,.06);
+}
+#${ROOT_ID} .blynk-followupChip{
+  font-size:11px; padding:5px 10px; border-radius:999px;
+  border:1px solid rgba(80,77,97,.10);
+  background:rgba(255,255,255,.58);
+  backdrop-filter:blur(8px);
+  -webkit-backdrop-filter:blur(8px);
+  cursor:pointer;
+  color:rgba(80,77,97,.75);
+  font-weight:600;
+  transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+  user-select:none;
+}
+#${ROOT_ID} .blynk-followupChip:hover{
+  transform:translateY(-1px);
+  border-color:rgba(var(--blynk-primary-rgb),.28);
+  background:rgba(255,255,255,.82);
 }
 
 #${ROOT_ID} .blynk-msg p{ margin: 0 0 10px 0; }
@@ -1442,7 +1466,8 @@
         savedSession.forEach((msg) => {
           const role = msg.role === "user" ? "user" : "ai";
           const meta = role === "user" ? "You • earlier" : "Blynky • earlier";
-          stage.appendChild(this._msgRow({ role, text: msg.content, meta, sourcesData: msg.sourcesData || undefined }));
+          const sd = msg.sourcesData ? Object.assign({}, msg.sourcesData, { _restored: true }) : undefined;
+          stage.appendChild(this._msgRow({ role, text: msg.content, meta, sourcesData: sd }));
           // Rebuild conversation history for multi-turn
           this._conversationHistory.push({ role: role === "ai" ? "assistant" : "user", content: msg.content });
         });
@@ -1752,6 +1777,22 @@
         bubble.appendChild(feedbackRow);
       }
 
+      // Follow-up question chips (only for fresh AI messages, not restored sessions)
+      if (role === "ai" && sourcesData && Array.isArray(sourcesData.suggestedFollowUps) && sourcesData.suggestedFollowUps.length && !sourcesData._restored) {
+        const followupsWrap = el("div", { class: "blynk-followups" });
+        sourcesData.suggestedFollowUps.forEach(function (q) {
+          const chip = el("button", { class: "blynk-followupChip", type: "button", text: q });
+          chip.addEventListener("click", function (e) {
+            e.stopPropagation();
+            // Remove the entire followups container on click
+            followupsWrap.remove();
+            Agent.handleSend(q);
+          });
+          followupsWrap.appendChild(chip);
+        });
+        bubble.appendChild(followupsWrap);
+      }
+
       const m = el("div", { class: `blynk-meta ${role}`, text: meta });
 
       if (role === "ai" && config.debug && sourcesData && sourcesData.intent) {
@@ -1782,6 +1823,10 @@
     async handleSend(forcedText) {
       const text = (forcedText || this.ui.input.value || "").trim();
       if (!text) return;
+
+      // Remove any existing follow-up chips when a new message is sent
+      var existingFollowups = this.ui.stage.querySelectorAll(".blynk-followups");
+      existingFollowups.forEach(function (el) { el.remove(); });
 
       this.appendMessage("user", text);
       this.ui.input.value = "";
@@ -1849,8 +1894,12 @@
 
         this.setTyping(false);
 
+        const suggestedFollowUps = (data && Array.isArray(data.suggested_follow_ups))
+          ? data.suggested_follow_ups.filter(function (q) { return typeof q === "string" && q.trim(); }).slice(0, 3)
+          : [];
+
         const answer = String((data && data.answer) || "No answer returned.").trim();
-        const sd = { adm, bypassRoleFilter, intent, richMedia, queryId };
+        const sd = { adm, bypassRoleFilter, intent, richMedia, queryId, suggestedFollowUps };
         this.appendMessage("ai", answer, sd);
 
         // Track assistant response in history
