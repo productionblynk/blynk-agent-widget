@@ -1736,8 +1736,9 @@
       }
 
       // Feedback buttons (AI messages with a queryId only, skip greeting/error)
+      var feedbackRow = null;
       if (role === "ai" && sourcesData && sourcesData.queryId) {
-        const feedbackRow = el("div", { class: "blynk-feedbackRow" });
+        feedbackRow = el("div", { class: "blynk-feedbackRow" });
         const label = el("span", { class: "blynk-feedbackLabel", text: "Helpful?" });
         const thumbUp = el("button", { class: "blynk-feedbackBtn", type: "button", "aria-label": "Thumbs up" });
         thumbUp.innerHTML = THUMB_UP_SVG;
@@ -1788,7 +1789,6 @@
         feedbackRow.appendChild(thumbUp);
         feedbackRow.appendChild(thumbDown);
         feedbackRow.appendChild(thanks);
-        bubble.appendChild(feedbackRow);
       }
 
       // Follow-up question chips (only for fresh AI messages, not restored sessions)
@@ -1805,6 +1805,11 @@
           followupsWrap.appendChild(chip);
         });
         bubble.appendChild(followupsWrap);
+      }
+
+      // Feedback row appended after follow-up chips
+      if (feedbackRow) {
+        bubble.appendChild(feedbackRow);
       }
 
       const m = el("div", { class: `blynk-meta ${role}`, text: meta });
