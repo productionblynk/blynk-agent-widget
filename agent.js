@@ -108,6 +108,14 @@
     }
   }
 
+  function formatTime(date) {
+    var h = date.getHours();
+    var m = date.getMinutes();
+    var ampm = h >= 12 ? "PM" : "AM";
+    h = h % 12 || 12;
+    return h + ":" + (m < 10 ? "0" : "") + m + " " + ampm;
+  }
+
   // -------------------------
   // Feedback SVG icons (Lucide-style, matching copy button stroke)
   // -------------------------
@@ -1274,6 +1282,7 @@
     _typingRow: null,
     _conversationHistory: [],
     _sessionMessages: [],
+    _lastSendTime: 0,
 
     _trimHistory(history, maxMessages, maxChars) {
       if (!Array.isArray(history) || !history.length) return [];
@@ -1444,12 +1453,11 @@
         const chip = el("div", { class: "blynk-chip", text: label });
         chip.setAttribute("data-chip", label);
         chip.addEventListener("click", () => {
-          this.ui.input.value = label;
-          this.ui.input.focus();
           chip.animate(
             [{ transform: "translateY(0)" }, { transform: "translateY(-2px)" }, { transform: "translateY(0)" }],
             { duration: 240, easing: "cubic-bezier(.2,.8,.2,1)" }
           );
+          Agent.handleSend(label);
         });
         chips.appendChild(chip);
       });
@@ -1465,7 +1473,8 @@
       if (savedSession && savedSession.length) {
         savedSession.forEach((msg) => {
           const role = msg.role === "user" ? "user" : "ai";
-          const meta = role === "user" ? "You • earlier" : "Blynky • earlier";
+          const timeStr = msg.timestamp ? formatTime(new Date(msg.timestamp)) : "earlier";
+          const meta = role === "user" ? "You • " + timeStr : "Blynky • " + timeStr;
           const sd = msg.sourcesData ? Object.assign({}, msg.sourcesData, { _restored: true }) : undefined;
           stage.appendChild(this._msgRow({ role, text: msg.content, meta, sourcesData: sd }));
           // Rebuild conversation history for multi-turn
@@ -1473,7 +1482,8 @@
         });
         this._sessionMessages = savedSession.slice();
       } else {
-        stage.appendChild(this._msgRow({ role: "ai", text: "Hi! How can I help today?", meta: "Blynky • just now" }));
+        const greetTime = formatTime(new Date());
+        stage.appendChild(this._msgRow({ role: "ai", text: "Hi! How can I help today?", meta: "Blynky • " + greetTime }));
       }
 
       // Typing row (avatar + dots)
@@ -1547,6 +1557,10 @@
       wrap.appendChild(sticker);
       wrap.appendChild(launcher);
       this.root.appendChild(wrap);
+
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && Agent.isOpen) Agent.close();
+      });
 
       this.ui = { wrap, panel, widget, stage, input, sendBtn, launcher, sticker, stickerText };
       this.close();
@@ -1815,7 +1829,8 @@
     },
 
     appendMessage(role, text, sourcesData) {
-      const meta = role === "user" ? "You • now" : "Blynky • now";
+      const time = formatTime(new Date());
+      const meta = role === "user" ? "You • " + time : "Blynky • " + time;
       this.ui.stage.insertBefore(this._msgRow({ role, text, meta, sourcesData }), this._typingRow || null);
       this.scrollToBottom();
     },
@@ -1823,6 +1838,10 @@
     async handleSend(forcedText) {
       const text = (forcedText || this.ui.input.value || "").trim();
       if (!text) return;
+
+      const now = Date.now();
+      if (now - this._lastSendTime < 1500) return;
+      this._lastSendTime = now;
 
       // Remove any existing follow-up chips when a new message is sent
       var existingFollowups = this.ui.stage.querySelectorAll(".blynk-followups");
@@ -1833,7 +1852,7 @@
 
       // Track conversation history
       this._conversationHistory.push({ role: "user", content: text });
-      this._sessionMessages.push({ role: "user", content: text });
+      this._sessionMessages.push({ role: "user", content: text, timestamp: new Date().toISOString() });
       this._saveSession();
 
       this.setSending(true);
@@ -1904,7 +1923,7 @@
 
         // Track assistant response in history
         this._conversationHistory.push({ role: "assistant", content: answer });
-        this._sessionMessages.push({ role: "ai", content: answer, sourcesData: sd });
+        this._sessionMessages.push({ role: "ai", content: answer, sourcesData: sd, timestamp: new Date().toISOString() });
         this._saveSession();
       } catch (err) {
         this.setTyping(false);
