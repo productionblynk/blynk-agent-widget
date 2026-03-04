@@ -1745,6 +1745,7 @@
       const stickerText = el("div", { class: "blynk-sticker-text" });
       sticker.appendChild(stickerText);
       sticker.addEventListener("click", () => {
+        this._stickerGreeting = this.ui.stickerText.textContent || "";
         this._dismissSticker();
         this.open();
       });
@@ -1843,6 +1844,14 @@
       this.isOpen = true;
       this.ui.panel.classList.add("open");
       if (this._isMobile()) this.ui.wrap.classList.add("blynk-mobile-open");
+
+      // If opened via sticker click, replace the default greeting with the sticker's greeting
+      if (this._stickerGreeting && this._sessionMessages.length === 0) {
+        const firstAiMsg = this.ui.stage.querySelector(".blynk-row.ai .blynk-bubble");
+        if (firstAiMsg) firstAiMsg.textContent = this._stickerGreeting;
+        this._stickerGreeting = "";
+      }
+
       this.ui.input.focus();
       this.scrollToBottom();
       this._dismissSticker();
