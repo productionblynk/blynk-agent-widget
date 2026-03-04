@@ -1779,8 +1779,8 @@
       try {
         const href = window.location.href;
         const url = new URL(href);
-        // Match /articles/<slug> pattern
-        const match = url.pathname.match(/\/articles\/([^/?#]+)/i);
+        // Match /articles/<slug>, /video/<slug>, /faq/<slug>, /faqs/<slug> pattern
+        const match = url.pathname.match(/\/(?:articles|video|faqs?)\/([^/?#]+)/i);
         if (!match) return;
 
         const slug = match[1];
