@@ -630,6 +630,23 @@
 }
 #${ROOT_ID} .blynk-sticker .blynk-sticker-text{
   margin-top:12px;
+  padding-right:16px;
+}
+#${ROOT_ID} .blynk-sticker .blynk-sticker-close{
+  position:absolute;
+  top:6px; right:6px;
+  width:20px; height:20px;
+  border:none; background:none;
+  cursor:pointer;
+  color:#9e9bab;
+  display:flex; align-items:center; justify-content:center;
+  border-radius:50%;
+  transition:color .15s ease, background .15s ease;
+  padding:0;
+}
+#${ROOT_ID} .blynk-sticker .blynk-sticker-close:hover{
+  color:#504d61;
+  background:rgba(80,77,97,.08);
 }
 @keyframes blynkStickerIn{
   from{opacity:0;transform:translateY(8px) scale(.96)}
@@ -1742,11 +1759,18 @@
       // Sticker (proactive article greeting bubble)
       const sticker = el("div", { class: "blynk-sticker" });
       sticker.style.display = "none";
+      const stickerClose = el("button", { class: "blynk-sticker-close", "aria-label": "Dismiss" });
+      stickerClose.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="2" y1="2" x2="10" y2="10"/><line x1="10" y1="2" x2="2" y2="10"/></svg>';
+      stickerClose.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this._dismissSticker(true);
+      });
       const stickerText = el("div", { class: "blynk-sticker-text" });
+      sticker.appendChild(stickerClose);
       sticker.appendChild(stickerText);
       sticker.addEventListener("click", () => {
         this._stickerGreeting = this.ui.stickerText.textContent || "";
-        this._dismissSticker();
+        this._dismissSticker(true);
         this.open();
       });
 
@@ -1766,11 +1790,14 @@
       this._maybeShowArticleGreeting();
     },
 
-    _dismissSticker() {
+    _dismissSticker(permanent) {
       const s = this.ui.sticker;
       if (!s || s.style.display === "none") return;
       s.classList.add("hiding");
       setTimeout(() => { s.style.display = "none"; }, 350);
+      if (permanent) {
+        try { sessionStorage.setItem("blynky_sticker_dismissed_" + this.config.clientId, "1"); } catch {}
+      }
     },
 
     async _maybeShowArticleGreeting() {
@@ -1787,10 +1814,8 @@
         const slug = match[1];
         if (!slug) return;
 
-        // Only once per session
-        const storageKey = "blynky_article_greeted";
-        if (sessionStorage.getItem(storageKey)) return;
-        sessionStorage.setItem(storageKey, "1");
+        // Stop showing once user has clicked the sticker or dismissed it with X
+        try { if (sessionStorage.getItem("blynky_sticker_dismissed_" + this.config.clientId)) return; } catch {}
 
         // Wait 3s before showing sticker
         await new Promise((r) => setTimeout(r, 3000));
