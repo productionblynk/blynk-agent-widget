@@ -1188,6 +1188,35 @@
 #${ROOT_ID} .blynk-send:active{transform: translateY(0)}
 #${ROOT_ID} .blynk-send:disabled{opacity:.55; cursor:not-allowed}
 
+#${ROOT_ID} .blynk-mic{
+  height:44px;
+  width:44px;
+  flex-shrink:0;
+  border-radius:14px;
+  border:1px solid rgba(80,77,97,.12);
+  background: rgba(255,255,255,.62);
+  box-shadow: 0 18px 55px var(--shadow);
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  transition: transform 220ms var(--ease), box-shadow 220ms var(--ease), border-color 220ms var(--ease);
+}
+#${ROOT_ID} .blynk-mic:hover{transform: translateY(-1px); box-shadow: 0 26px 90px var(--shadow)}
+#${ROOT_ID} .blynk-mic:active{transform: translateY(0)}
+#${ROOT_ID} .blynk-mic:disabled{opacity:.55; cursor:not-allowed}
+#${ROOT_ID} .blynk-mic svg{color: rgba(80,77,97,.55)}
+#${ROOT_ID} .blynk-mic.blynk-recording{
+  border-color: rgba(220,60,60,.45);
+  background: rgba(220,60,60,.10);
+  animation: blynk-pulse-mic 1.4s ease-in-out infinite;
+}
+#${ROOT_ID} .blynk-mic.blynk-recording svg{color: #dc3c3c}
+@keyframes blynk-pulse-mic{
+  0%,100%{box-shadow: 0 0 0 0 rgba(220,60,60,.25)}
+  50%{box-shadow: 0 0 0 8px rgba(220,60,60,0)}
+}
+
 /* Full-screen mobile layout */
 @media (max-width: 479px){
   #${ROOT_ID} .blynk-wrap{
@@ -1678,6 +1707,17 @@
       });
 
       composer.appendChild(inputWrap);
+
+      // Mic button — only if Web Speech API is supported
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      let micBtn = null;
+      if (SpeechRecognition) {
+        micBtn = el("button", { class: "blynk-mic", type: "button", title: "Voice input" });
+        micBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="1" width="6" height="11" rx="3"/><path d="M19 10v1a7 7 0 01-14 0v-1"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`;
+        micBtn.addEventListener("click", () => this._toggleVoiceInput());
+        composer.appendChild(micBtn);
+      }
+
       composer.appendChild(sendBtn);
 
       widget.appendChild(head);
@@ -1718,7 +1758,7 @@
         if (e.key === "Escape" && Agent.isOpen) Agent.close();
       });
 
-      this.ui = { wrap, panel, widget, stage, input, sendBtn, launcher, sticker, stickerText };
+      this.ui = { wrap, panel, widget, stage, input, sendBtn, micBtn, launcher, sticker, stickerText };
       this.close();
 
       // Proactive article greeting
@@ -1831,9 +1871,66 @@
       if (on) this.scrollToBottom();
     },
 
+    _toggleVoiceInput() {
+      // Stop if currently recording
+      if (this._recognition) {
+        this._recognition.stop();
+        this.ui.micBtn.classList.remove("blynk-recording");
+        this._recognition = null;
+        return;
+      }
+
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) return;
+
+      const recognition = new SR();
+      recognition.lang = "en-US";
+      recognition.interimResults = true;
+      recognition.continuous = true;
+
+      // Track what was in the input before recording started
+      const baseText = this.ui.input.value;
+
+      recognition.onresult = (event) => {
+        let interim = "";
+        let final = "";
+        for (let i = 0; i < event.results.length; i++) {
+          const t = event.results[i][0].transcript;
+          if (event.results[i].isFinal) final += t;
+          else interim += t;
+        }
+        const spoken = (final + interim).trim();
+        this.ui.input.value = baseText ? baseText + " " + spoken : spoken;
+      };
+
+      recognition.onerror = (event) => {
+        if (event.error !== "aborted") {
+          console.warn("[blynk] Speech recognition error:", event.error);
+        }
+        this.ui.micBtn.classList.remove("blynk-recording");
+        this._recognition = null;
+      };
+
+      recognition.onend = () => {
+        this.ui.micBtn.classList.remove("blynk-recording");
+        this._recognition = null;
+      };
+
+      recognition.start();
+      this.ui.micBtn.classList.add("blynk-recording");
+      this._recognition = recognition;
+    },
+
     setSending(isSending) {
       this.ui.sendBtn.disabled = isSending;
       this.ui.input.disabled = isSending;
+      if (this.ui.micBtn) this.ui.micBtn.disabled = isSending;
+      // Stop voice recording when sending
+      if (isSending && this._recognition) {
+        this._recognition.stop();
+        if (this.ui.micBtn) this.ui.micBtn.classList.remove("blynk-recording");
+        this._recognition = null;
+      }
     },
 
     _msgRow({ role, text, meta, sourcesData }) {
