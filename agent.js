@@ -32,7 +32,7 @@
   }
 
   const DEFAULT_PROFILE_ICON =
-    "https://blynk-images.s3.us-west-2.amazonaws.com/ai-agent/profile-icons/smart-blynky.png";
+    "https://blynk-images.s3.us-west-2.amazonaws.com/ai-agent/profile-icons/blynky-profile.png";
 
   const ROOT_ID = "blynk-agent-root";
   const STYLE_ID = "blynk-agent-style";
@@ -745,7 +745,7 @@
 #${ROOT_ID} .blynk-logoImg{width:80%; height:100%; object-fit:contain; border-radius:999px; display:block;}
 #${ROOT_ID} .blynk-brandText{display:flex; flex-direction:column; gap:2px; min-width:0}
 #${ROOT_ID} .blynk-kicker{font-size:13px; font-weight:650; color: rgba(80,77,97,.78); line-height:1.1}
-#${ROOT_ID} .blynk-title{font-size:22px; font-weight:800; line-height:1.05; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+#${ROOT_ID} .blynk-title{font-size:22px; font-weight:800; line-height:1.2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 
 #${ROOT_ID} .blynk-close{
   width:36px; height:36px; border-radius:14px;
@@ -760,7 +760,7 @@
   border-color: rgba(var(--blynk-accent-rgb), .28);
   box-shadow: 0 26px 90px var(--shadow);
 }
-#${ROOT_ID} .blynk-x{font-size:18px; line-height:1; color: rgba(var(--blynk-accent-rgb), .85)}
+#${ROOT_ID} .blynk-close svg{color: rgba(var(--blynk-accent-rgb), .85)}
 
 #${ROOT_ID} .blynk-subcopy{
   padding: 0 16px 10px;
@@ -830,6 +830,7 @@
 #${ROOT_ID} .blynk-bubble.user{
   background: rgba(170, 170, 178, 0.75);
   border-color: rgba(80, 77, 97, 0.4);
+  margin-left:auto;
 }
 
 /* Copy button on AI bubbles */
@@ -1079,8 +1080,9 @@
   color: rgba(80,77,97,.52);
   margin-top:4px;
 }
-#${ROOT_ID} .blynk-meta.ai{margin-left:40px}
-#${ROOT_ID} .blynk-meta.user{text-align:right; margin-right:40px}
+#${ROOT_ID} .blynk-meta.ai{margin-left:4px}
+#${ROOT_ID} .blynk-meta.user{text-align:right; margin-right:0}
+#${ROOT_ID} .blynk-avatar.user{display:none}
 
 /* Sources block (collapsible) */
 #${ROOT_ID} .blynk-sources{
@@ -1190,15 +1192,17 @@
 
 #${ROOT_ID} .blynk-send{
   height:44px;
-  min-width:78px;
-  padding:0 14px;
-  border-radius:14px;
+  width:44px;
+  flex-shrink:0;
+  padding:0;
+  border-radius:999px;
   border:1px solid rgba(var(--blynk-accent-rgb), .28);
-  background: linear-gradient(180deg, rgba(var(--blynk-accent-rgb), .22), rgba(var(--blynk-accent-rgb), .14));
+  background: linear-gradient(180deg, rgba(var(--blynk-accent-rgb), .55), rgba(var(--blynk-accent-rgb), .40));
   box-shadow: 0 18px 55px var(--shadow);
   cursor:pointer;
-  font-weight:750;
-  color: rgba(80,77,97,.92);
+  display:grid;
+  place-items:center;
+  color: #fff;
   transition: transform 220ms var(--ease), box-shadow 220ms var(--ease), filter 220ms var(--ease);
 }
 #${ROOT_ID} .blynk-send:hover{transform: translateY(-1px); box-shadow: 0 26px 90px var(--shadow); filter: brightness(1.02)}
@@ -1635,9 +1639,8 @@
       brand.appendChild(logo);
       brand.appendChild(brandText);
 
-      const closeBtn = el("button", { class: "blynk-close", type: "button", "aria-label": "Close" }, [
-        el("span", { class: "blynk-x", text: "×" }),
-      ]);
+      const closeBtn = el("button", { class: "blynk-close", type: "button", "aria-label": "Close" });
+      closeBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
       closeBtn.addEventListener("click", () => this.close());
 
       headerRow.appendChild(brand);
@@ -1714,7 +1717,9 @@
       });
       inputWrap.appendChild(input);
 
-      const sendBtn = el("button", { class: "blynk-send", type: "button", text: "Send" });
+      const sendBtn = el("button", { class: "blynk-send", type: "button" });
+      sendBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>';
+      sendBtn.setAttribute("aria-label", "Send");
       sendBtn.addEventListener("click", () => this.handleSend());
       input.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
@@ -2113,7 +2118,6 @@
 
       if (role === "user") {
         row.appendChild(wrap);
-        row.appendChild(av);
       } else {
         row.appendChild(av);
         row.appendChild(wrap);
