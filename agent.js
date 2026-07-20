@@ -686,6 +686,7 @@
   position:absolute;
   inset:-40px;
   z-index:0;
+  border-radius: calc(var(--radius-xl) + 40px);
   background:
     radial-gradient(220px 220px at 18% 18%, rgba(var(--blynk-primary-rgb), .55), transparent 60%),
     radial-gradient(240px 240px at 82% 28%, rgba(var(--blynk-accent-rgb), .45), transparent 62%),
